@@ -55,8 +55,10 @@
 #	HISTORY
 #
 #	Version is: YYYY/MM/DD @ HH:MMam/pm
-#	Version is: 2018/09/18 @ 4:30pm
+#	Version is: 2018/09/20 @ 3:45pm
 #
+#	- 2018/09/20 @ 3:45pm by Jeff Rippy | Tennessee Tech University
+#		- Fixed download loop from going infinite.
 #	- 2018/09/18 @ 4:30pm by Jeff Rippy | Tennessee Tech University
 #		- Modified for Tennessee Tech
 #		- Github source: https://github.com/scifiman/macOSUpgrade
