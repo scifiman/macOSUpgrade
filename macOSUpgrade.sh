@@ -55,9 +55,9 @@
 #	HISTORY
 #
 #	Version is: YYYY/MM/DD @ HH:MMam/pm
-#	Version is: 2018/09/13 @ 10:00am
+#	Version is: 2018/09/18 @ 4:30pm
 #
-#	- 2018/09/13 @ 10:00am by Jeff Rippy | Tennessee Tech University
+#	- 2018/09/18 @ 4:30pm by Jeff Rippy | Tennessee Tech University
 #		- Modified for Tennessee Tech
 #		- Github source: https://github.com/scifiman/macOSUpgrade
 #	- 2018/04/30 by Joshua Roskos | Jamf
@@ -78,14 +78,14 @@ date="$(date "+%Y%m%d.%H%M.%S")"
 APPDIR="/Applications"
 APP="${APPDIR}/Install macOS High Sierra.app"
 AppVersionFile="${APP}/Contents/Info.plist"
-DEBUG="FALSE"
+DEBUG="TRUE"
 logDir="/tmp/${scriptName}"
 log="${logDir}/${scriptName}.log"
 mountPoint=""
 computerName=""
 loggedInUsername=""
-OSInstaller="${APP}"
-downloadTrigger="some download trigger"
+OSInstaller="$APP"
+downloadTrigger="macOS High Sierra Download"
 osMajor="$(/usr/bin/sw_vers -productVersion | awk -F. '{print $2}')"
 osMinor="$(/usr/bin/sw_vers -productVersion | awk -F. '{print $3}')"
 eraseInstall=0						# 0 = Disabled
@@ -94,6 +94,8 @@ eraseInstall=0						# 0 = Disabled
 									# Only valid for macOS Clients 10.13+
 userDialog=0						# 0 = Full Screen
 									# 1 = Utility Window
+convertToAPFS=YES					# YES
+									# NO
 # This positions the dialog box for JamfHelper.
 downloadPositionHUD="ur"	# Leave blank for a centered position
 
@@ -102,13 +104,14 @@ downloadPositionHUD="ur"	# Leave blank for a centered position
 caffeinatePID=""
 OSInstallerVersion=""
 OSInstallESDChecksum=""
+checksumMatch="FALSE"
 macOSname=""
 title=""
 heading=""
 description=""
 downloadDescription=""
 macOSicon=""
-	
+
 ##########################################################################################
 # 
 # SCRIPT CONTENTS - DO NOT MODIFY BELOW THIS LINE
@@ -119,10 +122,13 @@ function finish()
 {
 	local exitStatus=$1
 	[[ $exitStatus ]] || exitStatus=0
+	if [[ -n $caffeinatePID ]]; then
+		[[ $DEBUG == TRUE ]] && message 0 "Stopping caffeinate PID: $caffeinatePID."
+		kill ${caffeinatePID}
+	fi
 	echo "FINISH: ${log}" | tee -a "${log}"
 	logger -f "${log}"
 	mv "${log}" "${log}.${date}"
-	kill ${caffeinatePID}
 	exit $exitStatus
 }
 
@@ -170,6 +176,7 @@ function downloadInstaller()
 		-iconSize 100 &
     # Capture PID for Jamf Helper HUD
     jamfHUDPID=$!
+    message 0 "JamfHelper PID is $jamfHUDPID"
     # Run policy to cache installer
     /usr/local/jamf/bin/jamf policy -event "$downloadTrigger"
     # Kill Jamf Helper HUD post download
@@ -182,10 +189,12 @@ function verifyChecksum()
 		osChecksum=$( /sbin/md5 -q "$OSInstaller/Contents/SharedSupport/InstallESD.dmg" )
 		if [[ "$osChecksum" == "$OSInstallESDChecksum" ]]; then
 			message 0 "Checksum: Valid"
+			checksumMatch="TRUE"
 			return
 		else
+			checksumMatch="FALSE"
 			message 0 "Checksum: Not Valid"
-			message 0 "Beginning new dowload of installer"
+			message 0 "Retrying installer download."
 			/bin/rm -rf "$OSInstaller"
 			sleep 2
 			downloadInstaller
@@ -198,8 +207,8 @@ function verifyChecksum()
 function createFirstBootScript()
 {
 	# This creates the First Boot Script to complete the install.
-	/bin/mkdir -p /Library/Scripts/TTU/finishOSInstall
-	cat << EOF > "/Library/Scripts/TTU/finishOSInstall/finishOSInstall.sh"
+	/bin/mkdir -p /Library/Scripts/tntech/finishOSInstall
+	cat << EOF > "/Library/Scripts/tntech/finishOSInstall/finishOSInstall.sh"
 #!/bin/bash
 # First Run Script to remove the installer.
 # Clean up files
@@ -210,12 +219,12 @@ function createFirstBootScript()
 # Remove LaunchDaemon
 /bin/rm -f /Library/LaunchDaemons/edu.tntech.cleanupOSInstall.plist
 # Remove Script
-/bin/rm -fdr /Library/Scripts/TTU/finishOSInstall
+/bin/rm -fdr /Library/Scripts/tntech/finishOSInstall
 exit 0
 EOF
 
-	/usr/sbin/chown root:admin /Library/Scripts/TTU/finishOSInstall/finishOSInstall.sh
-	/bin/chmod 755 /Library/Scripts/TTU/finishOSInstall/finishOSInstall.sh
+	/usr/sbin/chown root:admin /Library/Scripts/tntech/finishOSInstall/finishOSInstall.sh
+	/bin/chmod 755 /Library/Scripts/tntech/finishOSInstall/finishOSInstall.sh
 }
 
 function createLaunchDaemonPlist()
@@ -232,7 +241,7 @@ function createLaunchDaemonPlist()
 	<array>
 		<string>/bin/bash</string>
 		<string>-c</string>
-		<string>/Library/Scripts/TTU/finishOSInstall/finishOSInstall.sh</string>
+		<string>/Library/Scripts/tntech/finishOSInstall/finishOSInstall.sh</string>
 	</array>
 	<key>RunAtLoad</key>
 	<true/>
@@ -269,7 +278,7 @@ function createFileVaultLaunchAgentRebootPlist()
 		<true/>
 	</dict>
 	<key>TimeOut</key>
-	<integer>Aqua</integer>
+	<integer>600</integer>
 	<key>OnDemand</key>
 	<true/>
 	<key>ProgramArguments</key>
@@ -297,6 +306,7 @@ function main()
 	# Caffeinate
 	/usr/bin/caffeinate -dis &
 	caffeinatePID=$!
+	[[ $DEBUG == TRUE ]] && message 0 "Disabling sleep during script.  Caffeinate PID is $caffeinatePID."
 
 	# Verify arguments are passed in.  Otherwise exit.
 	if [[ "$#" -eq 0 ]]; then
@@ -336,7 +346,7 @@ function main()
 
 	# Version of OS Installer. Use Parameter 5 in the JSS to specify.
 	OSInstallerVersion="${argArray[4]}"
-	if [[ $OSInstallerVersion == "" ]]; then
+	if [[ -n $OSInstallerVersion ]]; then
 		[[ $DEBUG == TRUE ]] && message 0 "OS Installer Version specified as $OSInstallerVersion."
 	else
 		[[ $DEBUG == TRUE ]] && message 10 "No OS Installer Version specified. Please input the version of the installer that is being used."
@@ -355,10 +365,33 @@ function main()
 	OSInstallESDChecksum="${argArray[6]}"
 	if [[ $OSInstallESDChecksum == "" ]]; then
 		[[ $DEBUG == TRUE ]] && message 0 "No InstallESD checksum specified."
+		checksumMatch="TRUE"
 	else
 		[[ $DEBUG == TRUE ]] && message 0 "InstallESD checksum specified as $OSInstallESDChecksum."
 	fi
 	unset 'argArray[6]'	# Remove OSInstallESDChecksum from the argArray
+
+	eraseInstallTemp="${argArray[7]}"
+	if [[ $eraseInstallTemp == "" ]] || (( eraseInstallTemp == 0 )); then
+		message 0 "Erase Install option not specified or 0.  Assuming default of upgrade only.  The erase function will not happen."
+	elif (( eraseInstallTemp == 1 )); then
+		message 0 "Erase Install has been specified.  This will reset the computer to a \"factory default\" state."
+		eraseInstall="$eraseInstallTemp"
+	else
+		message 100 "Unknown option passed to eraseInstall variable: $eraseInstallTemp.  Exiting."
+	fi
+	unset 'argArray[7]'	# Remove eraseInstallTemp from the argArray
+
+	convertToAPFSTemp="${argArray[8]}"
+	if [[ $convertToAPFSTemp == "" ]] || [[ $convertToAPFSTemp =~ yes ]]; then
+		message 0 "Convert to APFS not specified or specified as Yes.  Assuming default action is to convert filesystem to APFS."
+	elif [[ $convertToAPFSTemp =~ no ]]; then
+		message 0 "Convert to APFS has been specified as No.  Action is to NOT convert filesystem to APFS."
+		convertToAPFS="NO"
+	else
+		message 110 "Unknown option passed to convertToAPFS variable: $convertToAPFSTemp.  Exiting."
+	fi
+	unset 'argArray[8]'	# Remove convertToAPFSTemp from the argArray
 
 	# Get title of the OS, i.e. macOS High Sierra
 	# Use these values for the user dialog box
@@ -388,7 +421,7 @@ function main()
 	fi
 
 	# Check if free space > 15GB
-	if [[ $osMajor -eq 12 ]] || [[ $osMajor -eq 13 && $osMinor -lt 4 ]]; then
+	if [[ $osMajor -eq 12 ]] || [[ $osMajor -eq 13 && $osMinor -lt 6 ]]; then
 		freeSpace=$(/usr/sbin/diskutil info / | grep "Available Space" | awk '{print $6}' | cut -c 2- )
 	else
 		freeSpace=$(/usr/sbin/diskutil info / | grep "Free Space" | awk '{print $6}' | cut -c 2- )
@@ -419,12 +452,19 @@ function main()
 				sleep 2
 				downloadInstaller
 			fi
+
+			if [[ $checksumMatch ]]; then
+				message 0 "Installer checksum matches.  Exiting download loop and continuing."
+				message 0 "Date stamp: $(date "+%Y%m%d.%H%M.%S")"
+				break
+			fi
+
 			((loopCount++))
 			if [[ $loopCount -ge 3 ]]; then
 				message 0 "macOS Installer Downloaded 3 Times - Checksum is Not Valid"
 				message 0 "Prompting user for error and exiting..."
 				/Library/Application\ Support/JAMF/bin/jamfHelper.app/Contents/MacOS/jamfHelper -windowType utility -title "$title" -icon "$macOSicon" -heading "Error Downloading $macOSname" -description "We were unable to prepare your computer for $macOSname. Please contact the myTECH Helpdesk to report this error.  E-mail: helpdesk@tntech.edu. Phone: 931-372-3975." -iconSize 100 -button1 "OK" -defaultButton 1
-				finish
+				message 200 "Could not complete macOS Installer download."
 			fi
 		else
 			downloadInstaller
@@ -438,16 +478,18 @@ function main()
 	# Begin install.
 	if [[ ${pwrStatus} == "OK" ]] && [[ ${spaceStatus} == "OK" ]]; then
 		# Launch jamfHelper
-		if [[ ${userDialog} == 0 ]]; then
+		if (( userDialog == 0 )); then
 			message 0 "Launching jamfHelper as FullScreen..."
 			/Library/Application\ Support/JAMF/bin/jamfHelper.app/Contents/MacOS/jamfHelper -windowType fs -title "" -icon "$macOSicon" -heading "$heading" -description "$description" &
 			jamfHelperPID=$!
+			message 0 "JamfHelper PID is $jamfHelperPID"
 		fi
 
-		if [[ ${userDialog} == 1 ]]; then
+		if (( userDialog == 1 )); then
 			message 0 "Launching jamfHelper as Utility Window..."
 			/Library/Application\ Support/JAMF/bin/jamfHelper.app/Contents/MacOS/jamfHelper -windowType utility -title "$title" -icon "$macOSicon" -heading "$heading" -description "$description" -iconSize 100 &
 			jamfHelperPID=$!
+			message 0 "JamfHelper PID is $jamfHelperPID"
 		fi
 
 		# Load LaunchAgent
@@ -459,16 +501,24 @@ function main()
 		# Begin Upgrade
 		message 0 "Launching startosinstall..."
 		# Check if eraseInstall is Enabled
-		if [[ $eraseInstall == 1 ]]; then
-			message 0 "Script is configured for Erase and Install of macOS."
-			"$OSInstaller/Contents/Resources/startosinstall" --applicationpath "$OSInstaller" --eraseinstall --nointeraction --pidtosignal "$jamfHelperPID" &
+		if (( eraseInstall == 1 )); then
+			message 0 "Script is configured for Erase and Install of macOS.  This will result in a \"factory default\" state after completion."
+#			# Removed --converttoapfs to troubleshoot
+#			[[ $DEBUG == TRUE ]] && message 0 "Command is: \"$OSInstaller\"/Contents/Resources/startosinstall --agreetolicense --applicationpath \"$OSInstaller\" --converttoapfs $convertToAPFS --eraseinstall --nointeraction --pidtosignal $jamfHelperPID &"
+#			"$OSInstaller"/Contents/Resources/startosinstall --agreetolicense --applicationpath "$OSInstaller" --converttoapfs $convertToAPFS --eraseinstall --nointeraction --pidtosignal $jamfHelperPID &
+			[[ $DEBUG == TRUE ]] && message 0 "Command is: \"$OSInstaller\"/Contents/Resources/startosinstall --agreetolicense --applicationpath \"$OSInstaller\" --eraseinstall --nointeraction --rebootdelay 5 --pidtosignal $jamfHelperPID &"
+			"$OSInstaller"/Contents/Resources/startosinstall --agreetolicense --applicationpath "$OSInstaller" --eraseinstall --nointeraction --rebootdelay 5 --pidtosignal $jamfHelperPID &
 		else
-			"$OSInstaller/Contents/Resources/startosinstall" --applicationpath "$OSInstaller" --nointeraction --pidtosignal "$jamfHelperPID" &
+#			# Removed converttoapfs to troubleshoot
+#			[[ $DEBUG == TRUE ]] && message 0 "Command is: \"$OSInstaller\"/Contents/Resources/startosinstall --agreetolicense --applicationpath \"$OSInstaller\" --converttoapfs $convertToAPFS --nointeraction --pidtosignal $jamfHelperPID &"
+#			"$OSInstaller"/Contents/Resources/startosinstall --agreetolicense --applicationpath "$OSInstaller" --converttoapfs $convertToAPFS --nointeraction --pidtosignal $jamfHelperPID &
+			[[ $DEBUG == TRUE ]] && message 0 "Command is: \"$OSInstaller\"/Contents/Resources/startosinstall --agreetolicense --applicationpath \"$OSInstaller\" --nointeraction --rebootdelay 5 --pidtosignal $jamfHelperPID &"
+			"$OSInstaller"/Contents/Resources/startosinstall --agreetolicense --applicationpath "$OSInstaller" --nointeraction --rebootdelay 5 --pidtosignal $jamfHelperPID &
 		fi
 		/bin/sleep 3
 	else
 		# Remove Script
-		/bin/rm -f "/Library/Scripts/TTU/finishOSInstall/finishOSInstall.sh"
+		/bin/rm -f "/Library/Scripts/tntech/finishOSInstall/finishOSInstall.sh"
 		/bin/rm -f "/Library/LaunchDaemons/edu.tntech.cleanupOSInstall.plist"
 		/bin/rm -f "/Library/LaunchAgents/com.apple.install.osinstallersetupd.plist"
 
