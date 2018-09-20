@@ -111,6 +111,7 @@ heading=""
 description=""
 downloadDescription=""
 macOSicon=""
+unsuccessfulDownload="FALSE"
 
 ##########################################################################################
 # 
@@ -445,6 +446,12 @@ function main()
 			if [[ $OSVersion == "$OSInstallerVersion" ]]; then
 				message 0 "Installer found, version matches. Verifying checksum..."
 				verifyChecksum
+				if [[ $checksumMatch ]]; then
+					message 0 "Installer checksum matches.  Exiting download loop and continuing."
+					message 0 "Date stamp: $(date "+%Y%m%d.%H%M.%S")"
+					unsuccessfulDownload="FALSE"
+					break
+				fi
 			else
 				# Delete old version.
 				message 0 "Installer found, but not the specified version. Deleting and downloading a new copy..."
@@ -452,24 +459,20 @@ function main()
 				sleep 2
 				downloadInstaller
 			fi
-
-			if [[ $checksumMatch ]]; then
-				message 0 "Installer checksum matches.  Exiting download loop and continuing."
-				message 0 "Date stamp: $(date "+%Y%m%d.%H%M.%S")"
-				break
-			fi
-
-			((loopCount++))
-			if [[ $loopCount -ge 3 ]]; then
-				message 0 "macOS Installer Downloaded 3 Times - Checksum is Not Valid"
-				message 0 "Prompting user for error and exiting..."
-				/Library/Application\ Support/JAMF/bin/jamfHelper.app/Contents/MacOS/jamfHelper -windowType utility -title "$title" -icon "$macOSicon" -heading "Error Downloading $macOSname" -description "We were unable to prepare your computer for $macOSname. Please contact the myTECH Helpdesk to report this error.  E-mail: helpdesk@tntech.edu. Phone: 931-372-3975." -iconSize 100 -button1 "OK" -defaultButton 1
-				message 200 "Could not complete macOS Installer download."
-			fi
 		else
 			downloadInstaller
 		fi
+
+		unsuccessfulDownload="TRUE"
+		((loopCount++))
 	done
+
+	if [[ $unsuccessfulDownload ]]; then
+		message 0 "macOS Installer Downloaded 3 Times - Checksum is Not Valid"
+		message 0 "Prompting user for error and exiting..."
+		/Library/Application\ Support/JAMF/bin/jamfHelper.app/Contents/MacOS/jamfHelper -windowType utility -title "$title" -icon "$macOSicon" -heading "Error Downloading $macOSname" -description "We were unable to prepare your computer for $macOSname. Please contact the myTECH Helpdesk to report this error.  E-mail: helpdesk@tntech.edu. Phone: 931-372-3975." -iconSize 100 -button1 "OK" -defaultButton 1
+		message 200 "Could not complete macOS Installer download."
+	fi
 
 	createFirstBootScript
 	createLaunchDaemonPlist
