@@ -29,6 +29,7 @@
 #
 #	SUPPORT FOR THIS PROGRAM
 #		No support is offered
+#		The copyright notice is left in place as this was originally written by Jamf.
 #
 ##########################################################################################
 #
@@ -40,8 +41,8 @@
 #	SYNOPSIS
 #		This script was designed to be used in a Self Service policy to ensure specific
 #		requirements have been met before proceeding with an inplace upgrade of the macOS,
-#		as well as to address changes Apple has made to the ability to complete macOS upgrades
-#		silently.
+#		as well as to address changes Apple has made to the ability to complete macOS
+#		upgrades silently.
 #
 ##########################################################################################
 #
@@ -49,14 +50,17 @@
 #		- Jamf Pro
 #		- macOS Clients running version 10.10.5 or later
 #		- macOS Installer 10.12.4 or later
-#		- eraseInstall option is ONLY supported with macOS Installer 10.13.4+ and client-side macOS 10.13+
+#		- eraseInstall option is ONLY supported with macOS Installer 10.13.4+
+#			and client-side macOS 10.13+
 #		- Look over the USER VARIABLES and configure as needed.
 #
 #	HISTORY
 #
 #	Version is: YYYY/MM/DD @ HH:MMam/pm
-#	Version is: 2018/09/20 @ 3:45pm
+#	Version is: 2018/09/28 @ 10:30am
 #
+#	- 2018/09/28 @ 10:30am by Jeff Rippy | Tennessee Tech University
+#		- Updated for macOS 10.14 Mojave
 #	- 2018/09/20 @ 3:45pm by Jeff Rippy | Tennessee Tech University
 #		- Fixed download loop from going infinite.
 #	- 2018/09/18 @ 4:30pm by Jeff Rippy | Tennessee Tech University
@@ -96,7 +100,7 @@ eraseInstall=0						# 0 = Disabled
 									# Only valid for macOS Clients 10.13+
 userDialog=0						# 0 = Full Screen
 									# 1 = Utility Window
-convertToAPFS=YES					# YES
+convertToAPFS="YES"					# YES
 									# NO
 # This positions the dialog box for JamfHelper.
 downloadPositionHUD="ur"	# Leave blank for a centered position
@@ -114,6 +118,16 @@ description=""
 downloadDescription=""
 macOSicon=""
 unsuccessfulDownload="FALSE"
+requiredMinimumRAM=4
+requiredMinimumSpace1013=15
+requiredMinimumSpace1014=20
+
+# Transform GB into Bytes
+gigabytes=$((1024 * 1024 * 1024))
+minimumRAM=$((requiredMinimumRAM * gigabytes))
+minimumSpace1013=$((requiredMinimumSpace1013 * gigabytes))
+minimumSpace1014=$((requiredMinimumSpace1014 * gigabytes))
+minimumSpace=""
 
 ##########################################################################################
 # 
@@ -260,9 +274,9 @@ function createFileVaultLaunchAgentRebootPlist()
 {
 	# If the drive is encrypted, create this LaunchAgent for authenticated reboots
 	# Determine Program Argument
-	if [[ $osMajor -ge 11 ]]; then
+	if (( osMajor >= 11 )); then
 		progArgument="osinstallersetupd"
-	elif [[ $osMajor -eq 10 ]]; then
+	elif (( osMajor == 10 )); then
 		progArgument="osinstallersetupplaind"
 	fi
 
@@ -286,7 +300,7 @@ function createFileVaultLaunchAgentRebootPlist()
 	<true/>
 	<key>ProgramArguments</key>
 	<array>
-		<string>$OSInstaller/Contents/Frameworks/OSInstallerSetup.framework/Resources/$progArgument</string>
+			<string>$OSInstaller/Contents/Frameworks/OSInstallerSetup.framework/Resources/$progArgument</string>
 	</array>
 </dict>
 </plist>
@@ -310,6 +324,7 @@ function main()
 	/usr/bin/caffeinate -dis &
 	caffeinatePID=$!
 	[[ $DEBUG == TRUE ]] && message 0 "Disabling sleep during script.  Caffeinate PID is $caffeinatePID."
+	jamf recon
 
 	# Verify arguments are passed in.  Otherwise exit.
 	if [[ "$#" -eq 0 ]]; then
@@ -419,23 +434,45 @@ function main()
 		pwrStatus="OK"
 		message 0 "Power Check: OK - AC Power Detected"
 	else
-		pwrStatus="ERROR"
-		message 0 "Power Check: ERROR - No AC Power Detected"
+		message 0 "Launching jamfHelper Dialog (Power Requirements Not Met)..."
+		/Library/Application\ Support/JAMF/bin/jamfHelper.app/Contents/MacOS/jamfHelper -windowType utility -title "Power Status Error" -icon "$macOSicon" -heading "AC Adapter Not Plugged In." -description "AC adapter not connected.  Please connect to power before proceeding." -iconSize 100 -button1 "OK" -defaultButton 1 -timeout 300 -countdown
+		pwrAdapter="$(/usr/bin/pmset -g ps)"
+		if [[ ${pwrAdapter} == *"AC Power"* ]]; then
+			pwrStatus="OK"
+			message 0 "Power Check: OK - AC Power Detected"		
+		else
+			pwrStatus="ERROR"
+			message 0 "Power Check: ERROR - No AC Power Detected"
+		fi
 	fi
 
-	# Check if free space > 15GB
-	if [[ $osMajor -eq 12 ]] || [[ $osMajor -eq 13 && $osMinor -lt 6 ]]; then
-		freeSpace=$(/usr/sbin/diskutil info / | grep "Available Space" | awk '{print $6}' | cut -c 2- )
-	else
-		freeSpace=$(/usr/sbin/diskutil info / | grep "Free Space" | awk '{print $6}' | cut -c 2- )
+	# Get current free space available.
+	freeSpace=$(diskutil info / | awk -F'[()]' '/Free Space|Available Space/ {print $2}' | sed -e 's/\ Bytes//')
+	OSInstallerVersionSED="$(echo "$OSInstallerVersion" | awk -F. '{print $1$2}')"
+	# Check if free space > 15GB for 10.13 or > 20GB for 10.14
+	if [[ $OSInstallerVersionSED -eq "1014" ]]; then
+		minimumSpace="$minimumSpace1014"
+		#&& "$freeSpace" -ge "$minimumSpace" ]]; then
+	elif [[ $OSInstallerVersionSED -eq "1013" ]]; then
+		minimumSpace="$minimumSpace1013"
 	fi
 
-	if [[ ${freeSpace%.*} -ge 15000000000 ]]; then
-		spaceStatus="OK"
-		message 0 "Disk Check: OK - ${freeSpace%.*} Bytes Free Space Detected"
-	else
+	if (( freeSpace < minimumSpace )); then
 		spaceStatus="ERROR"
-		message 0 "Disk Check: ERROR - ${freeSpace%.*} Bytes Free Space Detected"
+		message 0 "Disk Check: ERROR - $freeSpace Free Space Detected.  This is below threshold of $minimumSpace required."
+	else
+		spaceStatus="OK"
+		message 0 "Disk Check: OK - $freeSpace Free Space Detected."
+	fi
+
+	# Check amount of RAM installed
+	installedRAM="$(/usr/sbin/sysctl -n hw.memsize)"
+	if (( installedRAM < minimumRAM )); then
+		ramStatus="ERROR"
+		message 0 "RAM Check: ERROR - $installedRAM RAM Detected.  This is below threshold of $minimumRAM required."
+	else
+		ramStatus="OK"
+		message 0 "RAM Check: OS - $installedRAM RAM Detected."
 	fi
 
 	# Check for existing OS installer
@@ -469,7 +506,7 @@ function main()
 		((loopCount++))
 	done
 
-	if [[ $unsuccessfulDownload ]]; then
+	if [[ $unsuccessfulDownload == "TRUE" ]]; then
 		message 0 "macOS Installer Downloaded 3 Times - Checksum is Not Valid"
 		message 0 "Prompting user for error and exiting..."
 		/Library/Application\ Support/JAMF/bin/jamfHelper.app/Contents/MacOS/jamfHelper -windowType utility -title "$title" -icon "$macOSicon" -heading "Error Downloading $macOSname" -description "We were unable to prepare your computer for $macOSname. Please contact the myTECH Helpdesk to report this error.  E-mail: helpdesk@tntech.edu. Phone: 931-372-3975." -iconSize 100 -button1 "OK" -defaultButton 1
@@ -481,7 +518,17 @@ function main()
 	createFileVaultLaunchAgentRebootPlist
 
 	# Begin install.
-	if [[ ${pwrStatus} == "OK" ]] && [[ ${spaceStatus} == "OK" ]]; then
+	# Check power one more time.
+	pwrAdapter="$(/usr/bin/pmset -g ps)"
+	if [[ ${pwrAdapter} == *"AC Power"* ]]; then
+		pwrStatus="OK"
+		message 0 "Power Check: OK - AC Power Detected"		
+	else
+		pwrStatus="ERROR"
+		message 0 "Power Check: ERROR - No AC Power Detected"
+	fi
+
+	if [[ ${pwrStatus} == "OK" ]] && [[ ${spaceStatus} == "OK" ]] && [[ ${ramStatus} == "OK" ]]; then
 		# Launch jamfHelper
 		if (( userDialog == 0 )); then
 			message 0 "Launching jamfHelper as FullScreen..."
@@ -498,27 +545,37 @@ function main()
 		fi
 
 		# Load LaunchAgent
-		if [[ ${fvStatus} == "FileVault is On." ]] && [[ ${currentUser} != "root" ]]; then
+#		if [[ ${fvStatus} == "FileVault is On." ]] && [[ ${currentUser} != "root" ]]; then
 			userID="$(id -u "${currentUser}")"
 			launchctl bootstrap gui/"${userID}" /Library/LaunchAgents/com.apple.install.osinstallersetupd.plist
-		fi
+#		fi
 
 		# Begin Upgrade
 		message 0 "Launching startosinstall..."
 		# Check if eraseInstall is Enabled
-		if (( eraseInstall == 1 )); then
+		if (( eraseInstall == 1 )) && (( osMajor == 13 || osMajor == 14)); then
 			message 0 "Script is configured for Erase and Install of macOS.  This will result in a \"factory default\" state after completion."
-#			# Removed --converttoapfs to troubleshoot
-#			[[ $DEBUG == TRUE ]] && message 0 "Command is: \"$OSInstaller\"/Contents/Resources/startosinstall --agreetolicense --applicationpath \"$OSInstaller\" --converttoapfs $convertToAPFS --eraseinstall --nointeraction --pidtosignal $jamfHelperPID &"
-#			"$OSInstaller"/Contents/Resources/startosinstall --agreetolicense --applicationpath "$OSInstaller" --converttoapfs $convertToAPFS --eraseinstall --nointeraction --pidtosignal $jamfHelperPID &
-			[[ $DEBUG == TRUE ]] && message 0 "Command is: \"$OSInstaller\"/Contents/Resources/startosinstall --agreetolicense --applicationpath \"$OSInstaller\" --eraseinstall --nointeraction --rebootdelay 5 --pidtosignal $jamfHelperPID &"
-			"$OSInstaller"/Contents/Resources/startosinstall --agreetolicense --applicationpath "$OSInstaller" --eraseinstall --nointeraction --rebootdelay 5 --pidtosignal $jamfHelperPID &
+			# If convertToAPFS is explicitly set to NO, then we pass that on to the
+			# installer.
+			if (( osMajor == 13 )) && [[ $convertToAPFS == "NO" ]]; then
+				[[ $DEBUG == TRUE ]] && message 0 "Command is: \"$OSInstaller\"/Contents/Resources/startosinstall --agreetolicense --applicationpath \"$OSInstaller\" --converttoapfs \"$convertToAPFS\" --eraseinstall --nointeraction --pidtosignal \"$jamfHelperPID\" &"
+				"$OSInstaller"/Contents/Resources/startosinstall --agreetolicense --applicationpath "$OSInstaller" --converttoapfs "$convertToAPFS" --eraseinstall --nointeraction --pidtosignal "$jamfHelperPID" &
+			else
+				[[ $DEBUG == TRUE ]] && message 0 "Command is: \"$OSInstaller\"/Contents/Resources/startosinstall --agreetolicense --applicationpath \"$OSInstaller\" --eraseinstall --nointeraction --pidtosignal \"$jamfHelperPID\" &"
+				"$OSInstaller"/Contents/Resources/startosinstall --agreetolicense --applicationpath "$OSInstaller" --eraseinstall --nointeraction --pidtosignal "$jamfHelperPID" &
+			fi
+		elif (( eraseInstall == 1 )) && ((osMajor < 13 )); then
+			message 0 "Launching jamfHelper Dialog (Erase Requirements Not Met)..."
+			/Library/Application\ Support/JAMF/bin/jamfHelper.app/Contents/MacOS/jamfHelper -windowType utility -title "Invalid Install Options" -icon "$macOSicon" -heading "Invalid Erase and Install Options" -description "We were unable to Erase and Install $macOSname due to current macOS version < 10.13. Please contact the myTECH Helpdesk to report this error.  E-mail: helpdesk@tntech.edu. Phone: 931-372-3975." -iconSize 100 -button1 "OK" -defaultButton 1
+			message 300 "Script is configured for Erase and Install of macOS.  Client version, however, is earlier than macOS 10.13 High Sierra and does not support this command.  Continuing with normal install."
 		else
-#			# Removed converttoapfs to troubleshoot
-#			[[ $DEBUG == TRUE ]] && message 0 "Command is: \"$OSInstaller\"/Contents/Resources/startosinstall --agreetolicense --applicationpath \"$OSInstaller\" --converttoapfs $convertToAPFS --nointeraction --pidtosignal $jamfHelperPID &"
-#			"$OSInstaller"/Contents/Resources/startosinstall --agreetolicense --applicationpath "$OSInstaller" --converttoapfs $convertToAPFS --nointeraction --pidtosignal $jamfHelperPID &
-			[[ $DEBUG == TRUE ]] && message 0 "Command is: \"$OSInstaller\"/Contents/Resources/startosinstall --agreetolicense --applicationpath \"$OSInstaller\" --nointeraction --rebootdelay 5 --pidtosignal $jamfHelperPID &"
-			"$OSInstaller"/Contents/Resources/startosinstall --agreetolicense --applicationpath "$OSInstaller" --nointeraction --rebootdelay 5 --pidtosignal $jamfHelperPID &
+			if ((osMajor == 13 )) && [[ $convertToAPFS == "NO" ]]; then
+				[[ $DEBUG == TRUE ]] && message 0 "Command is: \"$OSInstaller\"/Contents/Resources/startosinstall --agreetolicense --applicationpath \"$OSInstaller\" --converttoapfs \"$convertToAPFS\" --nointeraction --pidtosignal \"$jamfHelperPID\" &"
+				"$OSInstaller"/Contents/Resources/startosinstall --agreetolicense --applicationpath "$OSInstaller" --converttoapfs "$convertToAPFS" --nointeraction --pidtosignal "$jamfHelperPID" &
+			else
+				[[ $DEBUG == TRUE ]] && message 0 "Command is: \"$OSInstaller\"/Contents/Resources/startosinstall --agreetolicense --applicationpath \"$OSInstaller\" --nointeraction --pidtosignal \"$jamfHelperPID\" &"
+				"$OSInstaller"/Contents/Resources/startosinstall --agreetolicense --applicationpath "$OSInstaller" --nointeraction --pidtosignal "$jamfHelperPID" &
+			fi
 		fi
 		/bin/sleep 3
 	else
@@ -528,9 +585,13 @@ function main()
 		/bin/rm -f "/Library/LaunchAgents/com.apple.install.osinstallersetupd.plist"
 
 		message 0 "Launching jamfHelper Dialog (Requirements Not Met)..."
-		/Library/Application\ Support/JAMF/bin/jamfHelper.app/Contents/MacOS/jamfHelper -windowType utility -title "$title" -icon "$macOSicon" -heading "Requirements Not Met" -description "We were unable to prepare your computer for $macOSname. Please ensure you are connected to power and that you have at least 15GB of Free Space.
-
-    If you continue to experience this issue, please contact the myTECH Helpdesk. E-mail: helpdesk@tntech.edu. Phone: 931-372-3975." -iconSize 100 -button1 "OK" -defaultButton 1
+		if ((osMajor == 13 )); then
+			/Library/Application\ Support/JAMF/bin/jamfHelper.app/Contents/MacOS/jamfHelper -windowType utility -title "$title" -icon "$macOSicon" -heading "Requirements Not Met" -description "We were unable to prepare your computer for $macOSname. Please ensure you are connected to power and that you have at least ${requiredMinimumSpace1013}GB of Free Space.  If you continue to experience this issue, please contact the myTECH Helpdesk. E-mail: helpdesk@tntech.edu. Phone: 931-372-3975." -iconSize 100 -button1 "OK" -defaultButton 1
+		elif ((osMajor == 14 )); then
+			/Library/Application\ Support/JAMF/bin/jamfHelper.app/Contents/MacOS/jamfHelper -windowType utility -title "$title" -icon "$macOSicon" -heading "Requirements Not Met" -description "We were unable to prepare your computer for $macOSname. Please ensure you are connected to power and that you have at least ${requiredMinimumSpace1014}GB of Free Space.  If you continue to experience this issue, please contact the myTECH Helpdesk. E-mail: helpdesk@tntech.edu. Phone: 931-372-3975." -iconSize 100 -button1 "OK" -defaultButton 1
+		else
+			/Library/Application\ Support/JAMF/bin/jamfHelper.app/Contents/MacOS/jamfHelper -windowType utility -title "$title" -icon "$macOSicon" -heading "Requirements Not Met" -description "We were unable to prepare your computer for $macOSname. Please ensure you are connected to power and that you have at least the minimum required free space for your selected operating system.  If you continue to experience this issue, please contact the myTECH Helpdesk. E-mail: helpdesk@tntech.edu. Phone: 931-372-3975." -iconSize 100 -button1 "OK" -defaultButton 1
+		fi
 	fi
 }
 
