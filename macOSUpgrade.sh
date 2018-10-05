@@ -57,8 +57,10 @@
 #	HISTORY
 #
 #	Version is: YYYY/MM/DD @ HH:MMam/pm
-#	Version is: 2018/09/28 @ 10:30am
+#	Version is: 2018/10/05 @ 3:45pm
 #
+#	- 2018/10/05 @ 3:45pm by Jeff Rippy | Tennessee Tech University
+#		- Updated to reflect some changes from Joshua's Master Branch, v. 2.7.2.1
 #	- 2018/09/28 @ 10:30am by Jeff Rippy | Tennessee Tech University
 #		- Updated for macOS 10.14 Mojave
 #	- 2018/09/20 @ 3:45pm by Jeff Rippy | Tennessee Tech University
@@ -176,7 +178,7 @@ function message()
 {
 	local thisCode=$1
 	local thisMessage="$2"
-	
+
 	(( thisCode > 0 )) && errorMessage "$thisCode" "${thisMessage}"
 	(( thisCode < 0 )) && warningMessage "$thisCode" "${thisMessage}"
 	(( thisCode == 0 )) && normalMessage "${thisMessage}"
@@ -184,20 +186,24 @@ function message()
 
 function downloadInstaller()
 {
+	# Inform the user about the download.
 	message 0 "Downloading $macOSname Installer..."
-    /Library/Application\ Support/JAMF/bin/jamfHelper.app/Contents/MacOS/jamfHelper \
+	/Library/Application\ Support/JAMF/bin/jamfHelper.app/Contents/MacOS/jamfHelper \
 		-windowType hud -windowPosition "$downloadPositionHUD" -title "$title" \
 		-alignHeading "center" -alignDescription "left" -description \
 		"$downloadDescription" -lockHUD -icon \
 		"/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/SidebarDownloadsFolder.icns" \
 		-iconSize 100 &
-    # Capture PID for Jamf Helper HUD
-    jamfHUDPID=$!
-    message 0 "JamfHelper PID is $jamfHUDPID"
-    # Run policy to cache installer
-    /usr/local/jamf/bin/jamf policy -event "$downloadTrigger"
-    # Kill Jamf Helper HUD post download
-    kill "${jamfHUDPID}"
+
+	# Capture PID for Jamf Helper HUD
+	jamfHUDPID=$!
+	message 0 "JamfHelper PID is $jamfHUDPID"
+
+	# Run policy to cache installer
+	/usr/local/bin/jamf policy -event "$downloadTrigger"
+
+	# Kill jamfHelper HUD post download
+	kill "${jamfHUDPID}"
 }
 
 function verifyChecksum()
@@ -232,7 +238,7 @@ function createFirstBootScript()
 /bin/rm -fdr \"$OSInstaller\"
 /bin/sleep 2
 # Update Device Inventory
-/usr/local/jamf/bin/jamf recon
+/usr/local/bin/jamf recon
 # Remove LaunchDaemon
 /bin/rm -f /Library/LaunchDaemons/edu.tntech.cleanupOSInstall.plist
 # Remove Script
@@ -295,7 +301,7 @@ function createFileVaultLaunchAgentRebootPlist()
 		<true/>
 	</dict>
 	<key>TimeOut</key>
-	<integer>600</integer>
+	<integer>300</integer>
 	<key>OnDemand</key>
 	<true/>
 	<key>ProgramArguments</key>
@@ -545,10 +551,10 @@ function main()
 		fi
 
 		# Load LaunchAgent
-#		if [[ ${fvStatus} == "FileVault is On." ]] && [[ ${currentUser} != "root" ]]; then
+		if [[ ${fvStatus} == "FileVault is On." ]] && [[ ${currentUser} != "root" ]]; then
 			userID="$(id -u "${currentUser}")"
 			launchctl bootstrap gui/"${userID}" /Library/LaunchAgents/com.apple.install.osinstallersetupd.plist
-#		fi
+		fi
 
 		# Begin Upgrade
 		message 0 "Launching startosinstall..."
