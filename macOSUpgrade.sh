@@ -81,55 +81,86 @@
 #
 ##########################################################################################
 
+# Standard Variables
 scriptName="macOSUpgrade"
 date="$(date "+%Y%m%d.%H%M.%S")"
-APPDIR="/Applications"
-APP="${APPDIR}/Install macOS High Sierra.app"
-AppVersionFile="${APP}/Contents/Info.plist"
-DEBUG="TRUE"
+appDir="/Applications"
+app="${appDir}/app.app"
+appVersionFile="${app}/Contents/Info.plist"
+caffeinatePID=""
+debug="TRUE"
 logDir="/tmp/${scriptName}"
 log="${logDir}/${scriptName}.log"
 mountPoint=""
 computerName=""
 loggedInUsername=""
-OSInstaller="$APP"
-downloadTrigger="macOS High Sierra Download"
+
+# OS Major and Minor version numbers for current OS install.
 osMajor="$(/usr/bin/sw_vers -productVersion | awk -F. '{print $2}')"
 osMinor="$(/usr/bin/sw_vers -productVersion | awk -F. '{print $3}')"
+
+# Transform GB into Bytes
+gigabytes=$((1024 * 1024 * 1024))
+
+# Script specific variables
+###downloadTrigger="macOS High Sierra Download"
+
+# eraseInstall is ONLY VALID if the macOS client is 10.13+ and the Installer is 10.13.4+
 eraseInstall=0						# 0 = Disabled
 									# 1 = Enabled (Factory Default)
-									# Only valid for macOS installer 10.13.4+
-									# Only valid for macOS Clients 10.13+
+eraseOpt=""
+
+# convertToAPFS is ONLY VALID for macOS 10.13 High Sierra installs.  APFS was introduced
+# in macOS 10.13 and is optional during the transition.  It is required for
+# macOS 10.14 Mojave.
+convertToAPFS=1						# 0 = No
+									# 1 = Yes
+apfsOpt=""
+
+# This positions the dialog box for JamfHelper.
+downloadPositionHUD="ur"			# Leave blank for a centered position
+
 userDialog=0						# 0 = Full Screen
 									# 1 = Utility Window
-convertToAPFS="YES"					# YES
-									# NO
-# This positions the dialog box for JamfHelper.
-downloadPositionHUD="ur"	# Leave blank for a centered position
+
+# Used to verify the macOS installer download.
+validChecksum=0					# 0 = False
+									# 1 = True
+
+#################################
 
 # The variables below here are set further in the script.
 # They are declared here so they are in the global scope.
-caffeinatePID=""
-OSInstallerVersion=""
-OSInstallESDChecksum=""
-checksumMatch="FALSE"
+downloadTrigger=""
 macOSname=""
+osInstallerPath=""
+installerVersion=""
+installerVersionMajor=""
+installerVersionMinor=""
+osInstallESDChecksum=""
+
 title=""
 heading=""
 description=""
 downloadDescription=""
 macOSicon=""
 unsuccessfulDownload="FALSE"
-requiredMinimumRAM=4
+requiredMinimumRAM1013=4
+requiredMinimumRAM1014=4
 requiredMinimumSpace1013=15
 requiredMinimumSpace1014=20
 
-# Transform GB into Bytes
-gigabytes=$((1024 * 1024 * 1024))
-minimumRAM=$((requiredMinimumRAM * gigabytes))
+
+minimumRAM1013=$((requiredMinimumRAM1013 * gigabytes))
+minimumRAM1014=$((requiredMinimumRAM1014 * gigabytes))
 minimumSpace1013=$((requiredMinimumSpace1013 * gigabytes))
 minimumSpace1014=$((requiredMinimumSpace1014 * gigabytes))
+minimumRAM=""
 minimumSpace=""
+
+#################################
+
+
 
 ##########################################################################################
 # 
@@ -142,7 +173,7 @@ function finish()
 	local exitStatus=$1
 	[[ $exitStatus ]] || exitStatus=0
 	if [[ -n $caffeinatePID ]]; then
-		[[ $DEBUG == TRUE ]] && message 0 "Stopping caffeinate PID: $caffeinatePID."
+		[[ $debug == TRUE ]] && message 0 "Stopping caffeinate PID: $caffeinatePID."
 		kill ${caffeinatePID}
 	fi
 	echo "FINISH: ${log}" | tee -a "${log}"
@@ -324,76 +355,101 @@ function main()
 	# Variable $3 is defined as username (That is the currently logged in user or root if at the loginwindow.
 	# These numbers change from 1-index to 0-index when put in an array.
 
-	local argArray=()
+#	local argArray=()
 
 	# Caffeinate
 	/usr/bin/caffeinate -dis &
 	caffeinatePID=$!
-	[[ $DEBUG == TRUE ]] && message 0 "Disabling sleep during script.  Caffeinate PID is $caffeinatePID."
+	[[ $debug == TRUE ]] && message 0 "Disabling sleep during script.  Caffeinate PID is $caffeinatePID."
 	jamf recon
 
-	# Verify arguments are passed in.  Otherwise exit.
-	if [[ "$#" -eq 0 ]]; then
-		message 99 "No parameters passed to script."	# We should never see this.
-	else
-		argArray=( "$@" )
-	fi
-
+#	# Verify arguments are passed in.  Otherwise exit.
+#	if [[ "$#" -eq 0 ]]; then
+#		message 99 "No parameters passed to script."	# We should never see this.
+#	else
+#		argArray=( "$@" )
+#	fi
+#
 	# Get the variables passed in and clean up if necessary.
-	mountPoint="${argArray[0]}"
-	[[ $DEBUG == TRUE ]] && message 0 "Mount Point BEFORE stripping a trailing slash (/) is $mountPoint."
-	unset 'argArray[0]'	# Remove mountPoint from the argArray
+	mountPoint="$1"
+	[[ $debug == TRUE ]] && message 0 "Mount Point BEFORE stripping a trailing slash (/) is $mountPoint."
+#	unset 'argArray[0]'	# Remove mountPoint from the argArray
 	mountPoint="${mountPoint%/}"	# This removes a trailing '/' if present.
-	[[ $DEBUG == TRUE ]] && message 0 "Mount Point AFTER stripping a trailing slash (/) is $mountPoint."
+	[[ $debug == TRUE ]] && message 0 "Mount Point AFTER stripping a trailing slash (/) is $mountPoint."
 
-	computerName="${argArray[1]}"
-	[[ $DEBUG == TRUE ]] && message 0 "Computer name is $computerName."
-	unset 'argArray[1]'	# Remove computerName from the argArray
+	computerName="$2"
+	[[ $debug == TRUE ]] && message 0 "Computer name is $computerName."
+#	unset 'argArray[1]'	# Remove computerName from the argArray
 
-	loggedInUsername="${argArray[2]}"
+	loggedInUsername="$3"
 	if [[ $loggedInUsername == "" ]]; then
-		[[ $DEBUG == TRUE ]] && message 0 "No user currently logged in."
+		message 10 "No user currently logged in.  For a macOS install from Self Service, a user MUST be logged in."
 	else
-		[[ $DEBUG == TRUE ]] && message 0 "Logged in Username is $loggedInUsername."
+		[[ $debug == TRUE ]] && message 0 "Logged in Username is $loggedInUsername."
 	fi
-	unset 'argArray[2]'	# Remove loggedInUsername from the argArray
+#	unset 'argArray[2]'	# Remove loggedInUsername from the argArray
 
-	# Specify path to OS installer. Use Parameter 4 in the JSS, or specify above in the variable list.
-	OSInstallerTemp="${argArray[3]}"
-	if [[ $OSInstallerTemp == "" ]]; then
-		[[ $DEBUG == TRUE ]] && message 0 "No path to OSInstaller specified. Using default of ${OSInstaller}."
+	# Specify full path to OS installer. Use Parameter 4 in the JSS or specify here.
+	# Example 1: osInstallerPath="/Applications/Install macOS High Sierra.app"
+	# Example 2: osInstallerPath="/Applications/Install macOS Mojave.app"
+	osInstallerPath="$4"
+	if [[ $osInstallerPath == "" ]]; then
+		message 0 "No path to OSInstaller specified.  Acceptable value is \"/Applications/Install macOS <Version Name>.app\""
 	else
-		[[ $DEBUG == TRUE ]] && message 0 "OS Installer path is now $OSInstaller."
-		OSInstaller="$OSInstallerTemp"
+		[[ $debug == TRUE ]] && message 0 "macOS Installer path is now $osInstallerPath."
 	fi
-	unset 'argArray[3]'	# Remove OSInstaller from the argArray
+#	unset 'argArray[3]'	# Remove OSInstaller from the argArray
 
-	# Version of OS Installer. Use Parameter 5 in the JSS to specify.
-	OSInstallerVersion="${argArray[4]}"
-	if [[ -n $OSInstallerVersion ]]; then
-		[[ $DEBUG == TRUE ]] && message 0 "OS Installer Version specified as $OSInstallerVersion."
-	else
-		[[ $DEBUG == TRUE ]] && message 10 "No OS Installer Version specified. Please input the version of the installer that is being used."
-	fi
-	unset 'argArray[4]'	# Remove OSInstallerVersion from the argArray
+	# Version of OS Installer. Use Parameter 5 in the JSS or specify here.
+	# Command to find version: $(/usr/libexec/PlistBuddy -c 'Print :"System Image Info" :version' "/Applications/Install macOS High Sierra.app/Contents/SharedSupprtInstallInfo.plist")
+	# Example: 10.13.6
 
-	downloadTriggerTemp="${argArray[5]}"
-	if [[ $downloadTriggerTemp == "" ]]; then
-		[[ $DEBUG == TRUE ]] && message 0 "No download trigger specified.  Using default value $downloadTrigger."
+	installerVersion="$5"
+	if [[ -n $installerVersion ]]; then
+		[[ $debug == TRUE ]] && message 0 "macOS installer version specified as $installerVersion."
 	else
-		[[ $DEBUG == TRUE ]] && message 0 "Specified download trigger is $downloadTrigger."
-		downloadTrigger="$downloadTriggerTemp"
+		message 20 "No macOS installer version specified. Please input the version of the installer that is being used."
 	fi
-	unset 'argArray[5]'	# Remove downloadTriggerTemp from the argArray
+	installerVersionMajor="$(/bin/echo "$installerVersion" | /usr/bin/awk -F. '{print $2}'"
+	installerVersionMinor="$(/bin/echo "$installerVersion" | /usr/bin/awk -F. '{print $3}'"
+#	unset 'argArray[4]'	# Remove installerVersion from the argArray
 
-	OSInstallESDChecksum="${argArray[6]}"
-	if [[ $OSInstallESDChecksum == "" ]]; then
-		[[ $DEBUG == TRUE ]] && message 0 "No InstallESD checksum specified."
-		checksumMatch="TRUE"
+	# downloadTrigger is the custom trigger name of a separate policy used to manage the
+	# macOS installer download attempts.  This policy should only have a single package
+	# (the macOS installer) and should not have any other scripts or configuration.  The
+	# policy should be set to ongoing with no other triggers set and NOT have Self Service
+	# enabled.  The only way this policy should execute is by being called using
+	# this trigger.  The custom event trigger should match what is passed in to
+	# this variable.
+	# Set the scope accordingly.  If set up as suggested where the only trigger is
+	# initiated from this script, the scope can be set to all computers.
+	downloadTrigger="$6"
+	if [[ -n $downloadTrigger ]]; then
+		[[ $debug == TRUE ]] && message 0 "Specified download trigger is $downloadTrigger."
 	else
-		[[ $DEBUG == TRUE ]] && message 0 "InstallESD checksum specified as $OSInstallESDChecksum."
+		message 30 "No download trigger specified."
 	fi
-	unset 'argArray[6]'	# Remove OSInstallESDChecksum from the argArray
+#	unset 'argArray[5]'	# Remove downloadTriggerTemp from the argArray
+
+	# MD5 checksum of InstallESD.dmg
+	# Optional variable used to compare the downloaded installer and verify as good.
+	# This can be blank if you do not want to use this functionality.
+	# Example Command: /sbin/md5 "/Applications/Install macOS High Sierra.app/Contents/SharedSupport/InstallESD.dmg"
+	# Example: b15b9db3a90f9ae8a9df0f81741efa2b
+	osInstallESDChecksum="$7"
+	if [[ -n  $osInstallESDChecksum ]]; then
+		[[ $debug == TRUE ]] && message 0 "InstallESD checksum specified as $OSInstallESDChecksum."
+	else
+		message 0 "No InstallESD checksum specified.  It is optional."
+		checksumMatch=1
+	fi
+#	unset 'argArray[6]'	# Remove OSInstallESDChecksum from the argArray
+
+
+
+#######################################
+
+
 
 	eraseInstallTemp="${argArray[7]}"
 	if [[ $eraseInstallTemp == "" ]] || (( eraseInstallTemp == 0 )); then
@@ -454,7 +510,7 @@ function main()
 
 	# Get current free space available.
 	freeSpace=$(diskutil info / | awk -F'[()]' '/Free Space|Available Space/ {print $2}' | sed -e 's/\ Bytes//')
-	OSInstallerVersionSED="$(echo "$OSInstallerVersion" | awk -F. '{print $1$2}')"
+	OSInstallerVersionSED="$(echo "$installerVersion" | awk -F. '{print $1$2}')"
 	# Check if free space > 15GB for 10.13 or > 20GB for 10.14
 	if [[ $OSInstallerVersionSED -eq "1014" ]]; then
 		minimumSpace="$minimumSpace1014"
@@ -488,7 +544,7 @@ function main()
 			message 0 "$OSInstaller found, checking version."
 			OSVersion=$(/usr/libexec/PlistBuddy -c 'Print :"System Image Info":version' "$OSInstaller/Contents/SharedSupport/InstallInfo.plist")
 			message 0 "OSVersion is $OSVersion"
-			if [[ $OSVersion == "$OSInstallerVersion" ]]; then
+			if [[ $OSVersion == "$installerVersion" ]]; then
 				message 0 "Installer found, version matches. Verifying checksum..."
 				verifyChecksum
 				if [[ $checksumMatch ]]; then
@@ -564,10 +620,10 @@ function main()
 			# If convertToAPFS is explicitly set to NO, then we pass that on to the
 			# installer.
 			if (( osMajor == 13 )) && [[ $convertToAPFS == "NO" ]]; then
-				[[ $DEBUG == TRUE ]] && message 0 "Command is: \"$OSInstaller\"/Contents/Resources/startosinstall --agreetolicense --applicationpath \"$OSInstaller\" --converttoapfs \"$convertToAPFS\" --eraseinstall --nointeraction --pidtosignal \"$jamfHelperPID\" &"
+				[[ $debug == TRUE ]] && message 0 "Command is: \"$OSInstaller\"/Contents/Resources/startosinstall --agreetolicense --applicationpath \"$OSInstaller\" --converttoapfs \"$convertToAPFS\" --eraseinstall --nointeraction --pidtosignal \"$jamfHelperPID\" &"
 				"$OSInstaller"/Contents/Resources/startosinstall --agreetolicense --applicationpath "$OSInstaller" --converttoapfs "$convertToAPFS" --eraseinstall --nointeraction --pidtosignal "$jamfHelperPID" &
 			else
-				[[ $DEBUG == TRUE ]] && message 0 "Command is: \"$OSInstaller\"/Contents/Resources/startosinstall --agreetolicense --applicationpath \"$OSInstaller\" --eraseinstall --nointeraction --pidtosignal \"$jamfHelperPID\" &"
+				[[ $debug == TRUE ]] && message 0 "Command is: \"$OSInstaller\"/Contents/Resources/startosinstall --agreetolicense --applicationpath \"$OSInstaller\" --eraseinstall --nointeraction --pidtosignal \"$jamfHelperPID\" &"
 				"$OSInstaller"/Contents/Resources/startosinstall --agreetolicense --applicationpath "$OSInstaller" --eraseinstall --nointeraction --pidtosignal "$jamfHelperPID" &
 			fi
 		elif (( eraseInstall == 1 )) && ((osMajor < 13 )); then
@@ -576,10 +632,10 @@ function main()
 			message 300 "Script is configured for Erase and Install of macOS.  Client version, however, is earlier than macOS 10.13 High Sierra and does not support this command.  Continuing with normal install."
 		else
 			if ((osMajor == 13 )) && [[ $convertToAPFS == "NO" ]]; then
-				[[ $DEBUG == TRUE ]] && message 0 "Command is: \"$OSInstaller\"/Contents/Resources/startosinstall --agreetolicense --applicationpath \"$OSInstaller\" --converttoapfs \"$convertToAPFS\" --nointeraction --pidtosignal \"$jamfHelperPID\" &"
+				[[ $debug == TRUE ]] && message 0 "Command is: \"$OSInstaller\"/Contents/Resources/startosinstall --agreetolicense --applicationpath \"$OSInstaller\" --converttoapfs \"$convertToAPFS\" --nointeraction --pidtosignal \"$jamfHelperPID\" &"
 				"$OSInstaller"/Contents/Resources/startosinstall --agreetolicense --applicationpath "$OSInstaller" --converttoapfs "$convertToAPFS" --nointeraction --pidtosignal "$jamfHelperPID" &
 			else
-				[[ $DEBUG == TRUE ]] && message 0 "Command is: \"$OSInstaller\"/Contents/Resources/startosinstall --agreetolicense --applicationpath \"$OSInstaller\" --nointeraction --pidtosignal \"$jamfHelperPID\" &"
+				[[ $debug == TRUE ]] && message 0 "Command is: \"$OSInstaller\"/Contents/Resources/startosinstall --agreetolicense --applicationpath \"$OSInstaller\" --nointeraction --pidtosignal \"$jamfHelperPID\" &"
 				"$OSInstaller"/Contents/Resources/startosinstall --agreetolicense --applicationpath "$OSInstaller" --nointeraction --pidtosignal "$jamfHelperPID" &
 			fi
 		fi
@@ -602,7 +658,7 @@ function main()
 }
 
 [[ ! -d "${logDir}" ]] && mkdir -p "${logDir}"
-[[ $DEBUG == TRUE ]] && message 0 "Mode: DEBUG"
+[[ $debug == TRUE ]] && message 0 "Mode: debug"
 message 0 "BEGIN: ${log} ${date}"
 main "$@"
 finish
