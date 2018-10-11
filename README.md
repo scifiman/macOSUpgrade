@@ -1,12 +1,7 @@
 # macOS Self Service Upgrade Process
 ###### Workflow for doing an in-place upgrade without user interaction.
 
-![OS X 10.10 Client Tested](https://img.shields.io/badge/OS%20X%2010.10-OK-brightgreen.svg)
-![OS X 10.11 Client Tested](https://img.shields.io/badge/OS%20X%2010.11-OK-brightgreen.svg)
-![OS X 10.12 Client Tested](https://img.shields.io/badge/OS%20X%2010.12-OK-brightgreen.svg)
-![macOS 10.13 Client Tested](https://img.shields.io/badge/macOS%2010.13-OK-brightgreen.svg)
-![OS X 10.12 Installer Tested](https://img.shields.io/badge/Sierra%20Installer-10.12.4%2B-yellow.svg)
-![macOS 10.13 Installer Tested](https://img.shields.io/badge/High%20Sierra%20Installer-OK-brightgreen.svg)
+[![Build Status](https://travis-ci.com/kc9wwh/macOSUpgrade.svg?branch=master)](https://travis-ci.com/kc9wwh/macOSUpgrade)
 ___
 This script was designed to be used in a Self Service policy to ensure specific requirements have been met before proceeding with an in-place upgrade to macOS, as well as to address changes Apple has made to the ability to complete macOS upgrades silently.
 
@@ -49,10 +44,15 @@ When you open the script you will find some user variables defined on lines 60-1
 
 **Staging the macOS Installer**
 
-In order for this script to work, you will have to have a copy of the macOS Installer that is available from the Mac App Store located in /Applications. One of the easiest ways to achieve this is to package the installer with composer as seen below and deploy the package via Jamf Pro.
+In order for this script to work, you will have to have a copy of the macOS Installer that is available from the Mac App Store located in /Applications. One of the easiest ways to achieve this is to package the installer (in PKG format) with Composer as seen below and deploy the package via Jamf Pro.
 
 ![alt text](/imgs/composer.png)
 
+Otherwise it can also be packaged using the command line as shown below and deploy the package via Jamf Pro.
+
+```sh
+pkgbuild --install-location /Applications --component "/path/to/macOSInstallerApp" "/path/to/xxxxx.pkg"
+```
 
 **Example of Required Self Service Description**
 

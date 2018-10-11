@@ -35,7 +35,7 @@
 # as well as to address changes Apple has made to the ability to complete macOS upgrades
 # silently.
 #
-# VERSION: v2.6.1
+# VERSION: v2.7.2.1
 #
 # REQUIREMENTS:
 #           - Jamf Pro
@@ -51,7 +51,7 @@
 # Written by: Joshua Roskos | Jamf
 #
 # Created On: January 5th, 2017
-# Updated On: April 30th, 2018
+# Updated On: September 28th, 2018
 #
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
@@ -63,13 +63,19 @@
 ##Example: /Applications/Install macOS High Sierra.app
 OSInstaller="$4"
 
-##Version of OS. Use Parameter 5 in the JSS, or specify here.
+##Version of Installer OS. Use Parameter 5 in the JSS, or specify here.
+##Example Command: /usr/libexec/PlistBuddy -c 'Print :"System Image Info":version' "/Applications/Install\ macOS\ High\ Sierra.app/Contents/SharedSupport/InstallInfo.plistr"
 ##Example: 10.12.5
 version="$5"
+versionMajor=$( /bin/echo "$version" | /usr/bin/awk -F. '{print $2}' )
+versionMinor=$( /bin/echo "$version" | /usr/bin/awk -F. '{print $3}' )
 
-##Trigger used for download. Use Parameter 6 in the JSS, or specify here.
-##This should match a custom trigger for a policy that contains an installer
-##Example: download-sierra-install
+##Custom Trigger used for download. Use Parameter 6 in the JSS, or specify here.
+##This should match a custom trigger for a policy that contains just the 
+##MacOS installer. Make sure that the policy is scoped properly
+##to relevant computers and/or users, or else the custom trigger will
+##not be picked up. Use a separate policy for the script itself.
+##Example trigger name: download-sierra-install
 download_trigger="$6"
 
 ##MD5 Checksum of InstallESD.dmg
@@ -89,19 +95,19 @@ unsuccessfulDownload=0
 ##Requires macOS Installer 10.13.4 or later
 ##Disabled by default
 ##Options: 0 = Disabled / 1 = Enabled
-eraseInstall=0
 ##Use Parameter 8 in the JSS.
-if [ "$8" -eq 0 ] || [ "$8" -eq 1 ];then
-  eraseInstall="$8"
+eraseInstall="$8"
+if [[ "${eraseInstall:=0}" != 1 ]]; then eraseInstall=0 ; fi
+#macOS Installer 10.13.3 or ealier set 0 to it.
+if [ "$versionMajor${versionMinor:=0}" -lt 134 ]; then
+    eraseInstall=0
 fi
 
 ##Enter 0 for Full Screen, 1 for Utility window (screenshots available on GitHub)
 ##Full Screen by default
-userDialog=0
 ##Use Parameter 9 in the JSS.
-if [ "$9" -eq 0 ] || [ "$9" -eq 1 ];then
-  userDialog="$9"
-fi
+userDialog="$9"
+if [[ ${userDialog:=0} != 1 ]]; then userDialog=0 ; fi
 
 ##Title of OS
 ##Example: macOS High Sierra
@@ -137,7 +143,7 @@ icon="$OSInstaller/Contents/Resources/InstallAssistant.icns"
 downloadInstaller() {
     /bin/echo "Downloading macOS Installer..."
     /Library/Application\ Support/JAMF/bin/jamfHelper.app/Contents/MacOS/jamfHelper \
-        -windowType hud -windowPosition $dlPosition -title "$title"  -alignHeading center -alignDescription left -description "$dldescription" \
+        -windowType hud -windowPosition $dlPosition -title "$title" -alignHeading center -alignDescription left -description "$dldescription" \
         -lockHUD -icon "/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/SidebarDownloadsFolder.icns" -iconSize 100 &
     ##Capture PID for Jamf Helper HUD
     jamfHUDPID=$!
@@ -162,8 +168,8 @@ verifyChecksum() {
             downloadInstaller
         fi
     else
-    	##Checksum not specified as script argument, assume true
-    	validChecksum=1
+        ##Checksum not specified as script argument, assume true
+        validChecksum=1
         return
     fi
 }
@@ -232,15 +238,15 @@ while [[ $loopCount -lt 3 ]]; do
           downloadInstaller
         fi
         if [ "$validChecksum" == 1 ]; then
-        	unsuccessfulDownload=0
-        	break
+            unsuccessfulDownload=0
+            break
         fi
     else
-    	downloadInstaller
+        downloadInstaller
     fi
 
-	unsuccessfulDownload=1
-   	((loopCount++))
+    unsuccessfulDownload=1
+    ((loopCount++))
 done
 
 if (( unsuccessfulDownload == 1 )); then
@@ -255,19 +261,19 @@ fi
 # CREATE FIRST BOOT SCRIPT
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
-/bin/mkdir /usr/local/jamfps
+/bin/mkdir -p /usr/local/jamfps
 
 /bin/echo "#!/bin/bash
 ## First Run Script to remove the installer.
 ## Clean up files
-/bin/rm -fdr \"$OSInstaller\"
+/bin/rm -fr \"$OSInstaller\"
 /bin/sleep 2
 ## Update Device Inventory
 /usr/local/jamf/bin/jamf recon
 ## Remove LaunchDaemon
 /bin/rm -f /Library/LaunchDaemons/com.jamfps.cleanupOSInstall.plist
 ## Remove Script
-/bin/rm -fdr /usr/local/jamfps
+/bin/rm -fr /usr/local/jamfps
 exit 0" > /usr/local/jamfps/finishOSInstall.sh
 
 /usr/sbin/chown root:admin /usr/local/jamfps/finishOSInstall.sh
@@ -311,7 +317,7 @@ elif [[ $osMajor -eq 10 ]]; then
     progArgument="osinstallersetupplaind"
 fi
 
-cat << EOP > /Library/LaunchAgents/com.apple.install.osinstallersetupd.plist
+/bin/cat << EOP > /Library/LaunchAgents/com.apple.install.osinstallersetupd.plist
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -347,12 +353,11 @@ EOP
 
 if [[ ${pwrStatus} == "OK" ]] && [[ ${spaceStatus} == "OK" ]]; then
     ##Launch jamfHelper
-    if [[ ${userDialog} == 0 ]]; then
+    if [ ${userDialog} -eq 0 ]; then
         /bin/echo "Launching jamfHelper as FullScreen..."
         /Library/Application\ Support/JAMF/bin/jamfHelper.app/Contents/MacOS/jamfHelper -windowType fs -title "" -icon "$icon" -heading "$heading" -description "$description" &
         jamfHelperPID=$!
-    fi
-    if [[ ${userDialog} == 1 ]]; then
+    else
         /bin/echo "Launching jamfHelper as Utility Window..."
         /Library/Application\ Support/JAMF/bin/jamfHelper.app/Contents/MacOS/jamfHelper -windowType utility -title "$title" -icon "$icon" -heading "$heading" -description "$description" -iconSize 100 &
         jamfHelperPID=$!
@@ -360,16 +365,21 @@ if [[ ${pwrStatus} == "OK" ]] && [[ ${spaceStatus} == "OK" ]]; then
     ##Load LaunchAgent
     if [[ ${fvStatus} == "FileVault is On." ]] && [[ ${currentUser} != "root" ]]; then
         userID=$( /usr/bin/id -u "${currentUser}" )
-        /bin/launchctl bootstrap gui/"${userID}"/Library/LaunchAgents/com.apple.install.osinstallersetupd.plist
+        /bin/launchctl bootstrap gui/"${userID}" /Library/LaunchAgents/com.apple.install.osinstallersetupd.plist
     fi
     ##Begin Upgrade
     /bin/echo "Launching startosinstall..."
     ##Check if eraseInstall is Enabled
     if [[ $eraseInstall == 1 ]]; then
+        eraseopt='--eraseinstall'
         /bin/echo "   Script is configured for Erase and Install of macOS."
-        "$OSInstaller/Contents/Resources/startosinstall" --applicationpath "$OSInstaller" --agreetolicense --eraseinstall --nointeraction --pidtosignal "$jamfHelperPID" &
+    fi
+
+    osinstallLogfile="/var/log/startosinstall.log"
+    if [ "$versionMajor" -ge 14 ]; then
+        eval /usr/bin/nohup "\"$OSInstaller/Contents/Resources/startosinstall\"" "$eraseopt" --agreetolicense --nointeraction --pidtosignal "$jamfHelperPID" >> "$osinstallLogfile" &
     else
-        "$OSInstaller/Contents/Resources/startosinstall" --applicationpath "$OSInstaller" --agreetolicense --nointeraction --pidtosignal "$jamfHelperPID" &
+        eval /usr/bin/nohup "\"$OSInstaller/Contents/Resources/startosinstall\"" "$eraseopt" --applicationpath "\"$OSInstaller\"" --agreetolicense --nointeraction --pidtosignal "$jamfHelperPID" >> "$osinstallLogfile" &
     fi
     /bin/sleep 3
 else
