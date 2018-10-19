@@ -59,9 +59,9 @@
 #	HISTORY
 #
 #	Version is: YYYY/MM/DD @ HH:MMam/pm
-#	Version is: 2018/10/11 @ 2:00pm
+#	Version is: 2018/10/19 @ 9:00am
 #
-#	- 2018/10/11 @ 2:00pm by Jeff Rippy | Tennessee Tech University
+#	- 2018/10/19 @ 9:00am by Jeff Rippy | Tennessee Tech University
 #		- Updated to reflect some changes from Joshua's Master Branch.
 #			v. 2.7.2.1
 #	- 2018/09/28 by Joshua Roskos | Jamf
@@ -83,9 +83,9 @@
 
 scriptName="macOSUpgrade"
 date="$(date "+%Y%m%d.%H%M.%S")"
-appDir="/Applications"
-app="${appDir}/App"
-AppVersionFile="${app}/Contents/Info.plist"
+#appDir="/Applications"
+#app="${appDir}/App"
+#AppVersionFile="${app}/Contents/Info.plist"
 debug="TRUE"
 logDir="/tmp/${scriptName}"
 log="${logDir}/${scriptName}.log"
@@ -170,16 +170,22 @@ function message()
 function checkFreeSpace()
 {
 	local myFreeSpace=""
+	local myFreeSpaceGB=""
 	local myMinimumSpace="$1"
+	local myMinimumSpaceGB=""
 	local mySpaceStatus=""
 
 	# Get the current amount of free space available.
 	myFreeSpace="$(/usr/sbin/diskutil info / | /usr/bin/awk -F'[()]' '/Free Space|Available Space/ {print $2}' | /usr/bin/sed -e 's/\ Bytes//')"
+	myFreeSpaceGB=$((myFreeSpace / gigabytes))
+	myMinimumSpaceGB=$((myMinimumSpace / gigabytes))
+
 	if ((myFreeSpace < myMinimumSpace)); then
-		message 300 "Disk Check: $mySpaceStatus - $myFreeSpace Detected.  This is below the minimum threshold of $myMinimumSpace required."
+		mySpaceStatus="ERROR"
+		message 300 "Disk Check: $mySpaceStatus - $myFreeSpaceGB GB detected.  This is below the minimum threshold of $myMinimumSpaceGB GB required."
 	else
 		mySpaceStatus="OK"
-		message 0 "Disk Check: $mySpaceStatus - $myFreeSpace Free Space Detected."
+		message 0 "Disk Check: $mySpaceStatus - $myFreeSpaceGB GB Free Space Detected."
 	fi
 
 	eval "$2=\$mySpaceStatus"
@@ -187,12 +193,214 @@ function checkFreeSpace()
 
 function checkRAM()
 {
-	true
+	local myInstalledRAM=""
+	local myMinimumRAM="$1"
+	local myRAMStatus=""
+	local myInstalledRAMGB=""
+	local myMinimumRAMGB=""
+
+	# Get the current amount of installed RAM.
+	myInstalledRAM="$(/usr/sbin/sysctl -n hw.memsize)"
+	myInstalledRAMGB=$((myInstalledRAM / gigabytes))
+	myMinimumRAMGB=$((myMinimumRAM / gigabytes))
+
+	if ((myInstalledRAM < myMinimumRAM)); then
+		myRAMStatus="ERROR"
+		message 310 "RAM Check: $myRAMStatus - $myInstalledRAMGB GB detected.  This is below the threshold of $myMinimumRAMGB GB required."
+	else
+		myRAMStatus="OK"
+		message 0 "RAM Check: $myRAMStatus - $myInstalledRAMGB GB Detected."
+	fi
+
+	eval "$2=\$myRAMStatus"
 }
 
 function checkPower()
 {
-	true
+	local myCount=0
+	local myPowerAdapter=""
+	local myPowerStatus=""
+	local myWindowType="utility"
+	local myWindowPosition="ur"
+	local myTitle="Power Status Error"
+	local myHeading="AC Adapter Not Connected"
+	local myDescription="Please connect to a power outlet before proceeding with this install."
+	local myAlignDescription="left"
+	local myAlignHeading="justified"
+	local myAlignCountdown="right"
+	local myButton1Label="OK"
+	local myIcon="/System/Library/PreferencePanes/EnergySaver.prefPane/Contents/Resources/EnergySaver.icns"
+	local myIconSize=100
+	local myTimeout=120
+
+	while ((myCount < 3)); do
+		myPowerAdapter="$(/usr/bin/pmset -g ps)"
+		if [[ $myPowerAdapter == *"AC Power"* ]]; then
+			myPowerStatus="OK"
+			message 0 "Power Check: $myPowerStatus - AC power detected."
+			break
+		else
+			myPowerStatus="ERROR"
+			message 0 "Power Check: $myPowerStatus - No AC power detected."
+			message 0 "Launching jamfHelper Dialog (Power Requirements Not Met)..."
+			/Library/Application\ Support/JAMF/bin/jamfHelper.app/Contents/MacOS/jamfHelper -windowType "$myWindowType" -windowPosition "$myWindowPosition" -title "$myTitle" -heading "$myHeading" -alignHeading "$myAlignHeading" -description "$myDescription" -alignDescription "$myAlignDescription" -icon "$myIcon" -iconSize "$myIconSize" -button1 "$myButton1Label" -defaultButton 1 -timeout "$myTimeout" -countdown -alignCountdown "$myAlignCountdown"
+		fi
+		((myCount++))
+	done
+
+	eval "$1=\$myPowerStatus"
+}
+
+function getFileVaultStatus()
+{
+	local myFvStatus=""
+
+	myFvStatus="$(/usr/bin/fdesetup status | head -1)"
+	message 0 "FileVault Check: $myFvStatus"
+
+	eval "$1=\myFvStatus"
+}
+
+function downloadInstaller()
+{
+	local myDownloadTrigger="$1"
+	local myWindowType="hud"
+	local myWindowPosition="ur"
+	local myTitle="Downloading $macOSname Installer"
+	local myDescription="Downloading macOS installer.  This may take up to 30 minutes, but usually takes much less time.  Please do not restart or power off your computer during this time."
+	local myAlignDescription="left"
+	local myIcon="/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/sidebarDownloadsFolder.icns"
+	local myIconSize=100
+	local myJamfHelperPID=""
+
+	[[ $debug == TRUE ]] && message 0 "Downloading macOS Installer."
+	/Library/Application\ Support/JAMF/bin/jamfHelper.app/Contents/MacOS/jamfHelper -windowType "$myWindowType" -windowPosition "$myWindowPosition" -title "$myTitle" -description "$myDescription" -alignDescription "$myAlignDescription" -icon "$myIcon" -iconSize "$myIconSize" -lockHUD &
+	myJamfHelperPID=$!
+
+	/usr/local/bin/jamf policy -event "$myDownloadTrigger"
+	/bin/kill "$myJamfHelperPID"
+}
+
+function verifyChecksum()
+{
+	local myInstallerPath="$1"
+	local myInstallESDChecksum="$2"
+	local myChecksum=""
+	local myValidChecksum=0
+
+	if [[ -n $myInstallESDChecksum ]]; then
+		myChecksum="$(/sbin/md5 -q "$myInstallerPath/Contents/SharedSupport/InstallESD.dmg")"
+		if [[ $myChecksum == "$myInstallESDChecksum" ]]; then
+			myValidChecksum=1
+			message 0 "The macOS installer checksum is valid ($myValidChecksum)."
+			eval "$3=\$myValidChecksum"
+			return
+		else
+			message 0 "The macOS installer checksum is invalid ($myValidChecksum)."
+			message 0 "Retrying download."
+			/bin/rm -rf "$myInstallerPath"
+			/bin/sleep 2
+			downladInstaller
+		fi
+	else
+		# Checksum null, assumed valid
+		myValidChecksum=1
+		message 0 "Checksum was null and therefore assume valid ($myValidChecksum)."
+		eval "$3=\$myValidChecksum"
+		return
+	fi
+}
+
+function createFirstBootScript()
+{
+	local myInstallerPath="$1"
+
+	/bin/mkdir -p /usr/local/tntech/finishOSInstall
+	/bin/cat << EOF > "/usr/local/tntech/finishOSInstall/finishOSInstall.sh"
+#!/bin/bash
+# First run script to remove the installer and associated files.
+/bin/rm -fr "$myInstallerPath"
+/bin/sleep 2
+# Update inventory
+/usr/local/bin/jamf recon
+# Remove LaunchDaemon
+/bin/rm -f /Library/LaunchDaemons/edu.tntech.cleanupOSInstall.plist
+# Remove this script
+/bin/rm -fr /usr/local/tntech/finishOSInstall
+EOF
+
+	/usr/sbin/chown -R root:admin /usr/local/tntech/finishOSInstall
+	/bin/chmod -R 755 /usr/local/tntech/finishOSInstall
+	message 0 "First Boot Script successfully created."
+}
+
+function createLaunchDaemonPlist()
+{
+	/bin/cat << EOF > "/Library/LaunchDaemons/edu.tntech.cleanupOSInstall.plist"
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>edu.tntech.cleanupOSInstall.plist</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>-c</string>
+		<string>/usr/local/tntech/finishOSInstall/finishOSInstall.sh</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+</dict>
+</plist>
+EOF
+
+	/usr/sbin/chown root:wheel /Library/LaunchDaemons/edu.tntech.cleanupOSInstall.plist
+	/bin/chmod 644 /Library/LaunchDaemons/edu.tntech.cleanupOSInstall.plist
+
+	message 0 "LaunchDaemon successfully created."
+}
+
+function createLaunchAgentFileVaultRebootPlist()
+{
+	local myInstallerPath="$1"
+	local myProgramArgument="osinstallersetupd"
+
+	if ((osVersionMajor == 10)); then
+		myProgramArgument="osinstallersetupplaind"
+	fi
+
+# Program Argument string may need extra quotes if this doesn't work.
+	/bin/cat << EOF > "/Library/LaunchAgents/com.apple.install.osinstallersetupd.plist"
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.apple.install.osinstallersetupd</string>
+	<key>LimitLoadToSessionType</key>
+	<string>Aqua</string>
+	<key>MachServices</key>
+	<dict>
+		<key>com.apple.install.osinstallersetupd</key>
+		<true/>
+	</dict>
+	<key>TimeOut</key>
+	<integer>300</integer>
+	<key>OnDemand</key>
+	<true/>
+	<key>ProgramArguments</key>
+	<array>
+		<string>$myInstallerPath/Contents/Frameworks/OSInstallerSetup.framework/Resources/$myProgramArgument</string>
+	</array>
+</dict>
+</plist>
+EOF
+
+	/usr/sbin/chown root:wheel /Library/LaunchAgents/com.apple.install.osinstallersetupd.plist
+	/bin/chmod 644 /Library/LaunchAgents/com.apple.install.osinstallersetupd.plist
+
+	message 0 "LaunchAgent for FileVault Reboot successfully created."
 }
 
 function main()
@@ -213,18 +421,52 @@ function main()
 	local installESDChecksum=""
 	local validChecksum=0
 	local eraseInstall=""
-	local convertToAPFS=""
 	local minimumSpace=""
 	local minimumRAM=""
 	local spaceStatus=""
 	local ramStatus=""
 	local powerStatus=""
-	local requiredMinimumSpace=""
+	local fvStatus=""
+	local windowType=""
+	local windowPosition=""
+	local title=""
+	local heading=""
+	local description=""
+	local alignDescription=""
+	local alignHeading=""
+	local alignCountdown=""
+	local button1Label=""
+	local icon=""
+	local iconSize=""
+	local timeout=""
+	local count=""
+	local successfulDownload=""
+	local downloadVersion=""
+	local jamfHelperPID=""
 
 	# Caffeinate
 	/usr/bin/caffeinate -dis &
 	caffeinatePID=$!
 	[[ $debug == TRUE ]] && message 0 "Disabling sleep during script.  Caffeinate PID is $caffeinatePID."
+
+	if ((osVersionMajor == 10 && osVersionMinor < 5)) || ((osVersionMajor < 10)); then
+		windowType="utility"
+		windowPosition="center"
+		title="Currently Installed Mac OS X (macOS) Version Not Supported"
+		heading="Operating System Requirements Not Met"
+		description="This upgrade method is only supported on machines running Mac OS X 10.10.5 and newer.
+Please contact the myTECH Helpdesk for assistance.
+email: helpdesk@tntech.edu, phone: (931) 372-3975"
+		alignDescription="left"
+		alignHeading="center"
+		alignCountdown="right"
+		button1Label="OK"
+		timeout=120
+
+		message 0 "Launching jamfHelper Dialog (OS Requirements Not Met)..."
+		/Library/Application\ Support/JAMF/bin/jamfHelper.app/Contents/MacOS/jamfHelper -windowType "$windowType" -windowPosition "$windowPosition" -title "$title" -heading "$heading" -alignHeading "$alignHeading" -description "$description" -alignDescription "$alignDescription" -button1 "$button1Label" -defaultButton 1 -timeout "$timeout" -countdown -alignCountdown "$alignCountdown"
+		message 500 "This upgrade method is only supported on machines running Mac OS X 10.10.5 and later. Please contact the myTECH Helpdesk for assistance.  email: helpdesk@tntech.edu, phone: (931) 372-3975"
+	fi
 
 	# Verify arguments are passed in.  Otherwise exit.
 	if [[ "$#" -eq 0 ]]; then
@@ -314,47 +556,139 @@ function main()
 		message 60 "The parameter for erase and install contained an unknown value.  Exiting."
 	fi
 
-	# (Optional) APFS conversion option. APFS is Apple's new filesystem for
-	# macOS 10.13 High Sierra and is enabled by default.  With High Sierra, you
-	# can disable the conversion if you wish to stay with HFS+.
-	# This is no longer an option with macOS 10.14 Mojave and will be ignored
-	# on Mojave installs.
-	convertToAPFS="$9"
-	if [[ -z $convertToAPFS ]]; then
-		message 0 "(OPTIONAL) The option to use APFS (default) has been selected."
-	elif [[ $convertToAPFS =~ ^[01]$ ]]; then
-		if ((convertToAPFS == 0 )); then
-			if ((installerVersionMajor == 13)); then
-				message 0 "(OPTIONAL) The option to NOT convert to APFS and stay with HFS+ has been selected."
-			else
-				message 70 "(OPTIONAL) The option to NOT convert to APFS and stay with HFS+ has been selected. However, the macOS installer version is macOS 10.14 and APFS is required. Stopping installation."
-			fi
-		else
-			message 0 "(OPTIONAL) The option to use APFS (default) has been selected."
-		fi
-	else
-		message 80 "The parameter for conversion to APFS contained an unknown value.  Exiting."
-	fi
-
 	case $installerVersionMajor in
 		13)
 			minimumRAM="$minimumRAM1013"
 			minimumSpace="$minimumSpace1013"
-			requiredMinimumSpace="requiredMinimumSpace1013"
 			;;
 		14)
 			minimumRAM="$minimumRAM1014"
 			minimumSpace="$minimumSpace1014"
-			requiredMinimumSpace="requiredMinimumSpace1014"
 			;;
 		*)
-			message 80 "Unknown macOS installer version."
+			message 90 "Unknown/Unsupported macOS installer version."
 			;;
 	esac
 
 	checkFreeSpace "$minimumSpace" spaceStatus
 	checkRAM "$minimumRAM" ramStatus
 	checkPower powerStatus
+	getFileVaultStatus fvStatus
+
+	# downloadInstaller
+	count=0
+	successfulDownload=0
+
+	while ((count < 3)); do
+		if [[ -d "$installerPath" ]]; then
+			message 0 "Found macOS installer.  Checking version."
+			downloadVersion="$(/usr/libexec/PlistBuddy -c 'Print :"System Image Info":version' "$installerPath/Contents/SharedSupport/InstallInfo.plist")"
+			if [[ $downloadVersion == "$installerVersion" ]]; then
+				message 0 "macOS installer version matches.  Verifying checksum."
+				verifyChecksum "$installerPath" "$installESDChecksum" validChecksum
+			else
+				message 0 "macOS installer found but version does not match."
+				/bin/rm -rf "$installerPath"
+				/bin/sleep 2
+				downloadInstaller "$downloadTrigger"
+			fi
+
+			if ((validChecksum == 1)); then
+				successfulDownload=1
+				break
+			fi
+		else
+			downloadInstaller "$downloadTrigger"
+		fi
+
+		successfulDownload=0
+		((count++))
+	done
+
+	if ((successfulDownload == 0)); then
+		windowType="utility"
+		windowPosition="center"
+		title="$macOSname Upgrade."
+		heading="Error downloading $macOSname installer."
+		description="There was an error preparing your computer for $macOSname.  The $macOSname installer did not download correctly.  Please contact the myTECH Helpdesk for assistance.
+email: helpdesk@tntech.edu, phone: (931) 372-3975"
+		alignDescription="left"
+		alignHeading="center"
+		button1Label="OK"
+
+		/Library/Application\ Support/JAMF/bin/jamfHelper.app/Contents/MacOS/jamfHelper -windowType "$windowType" -windowPosition "$windowPosition" -title "$title" -heading "$heading" -alignHeading "$alignHeading" -description "$description" -alignDescription "$alignDescription" -button1 "$button1Label" -defaultButton 1
+		/bin/rm -rf "$installerPath"
+		message 100 "macOS installer download attempted 3 times - Checksum is not valid."
+	fi
+
+	createFirstBootScript "$installerPath"
+	createLaunchDaemonPlist
+	createLaunchAgentFileVaultRebootPlist "$installerPath"
+
+	checkPower powerStatus
+	if [[ ! $powerStatus == "OK" || ! $spaceStatus == "OK" || ! $ramStatus == "OK" ]]; then
+		/bin/rm -f /Library/LaunchAgents/com.apple.install.osinstallersetupd.plist
+		/bin/rm -f /Library/LaunchDaemons/edu.tntech.finishOSInstall.plist
+		/bin/rm -f /usr/local/tntech/finishOSInstall/finishOSInstall.sh
+
+		windowType="utility"
+		windowPosition="center"
+		title="$macOSname Upgrade."
+		heading="Error downloading $macOSname installer."
+		description="There was an error preparing your computer for $macOSname.  One of the system requirements (HD Space, RAM, Power Status) was not met.  Please contact the myTECH Helpdesk for assistance.
+email: helpdesk@tntech.edu, phone: (931) 372-3975"
+		alignDescription="left"
+		alignHeading="center"
+		button1Label="OK"
+
+		message 0 "Launching jamfHelper Dialog (Requirements Not Met)."
+		/Library/Application\ Support/JAMF/bin/jamfHelper.app/Contents/MacOS/jamfHelper -windowType "$windowType" -windowPosition "$windowPosition" -title "$title" -heading "$heading" -alignHeading "$alignHeading" -description "$description" -alignDescription "$alignDescription" -button1 "$button1Label" -defaultButton 1
+
+#		jamfHelperPID=$!
+#/bin/kill "jamfHelperPID"
+		message 510 "System requirements error: HD Space ($spaceStatus), RAM ($ramStatus), power ($powerStatus)."
+	fi
+
+	message 0 "Launching startosinstall."
+	if [[ $fvStatus == "FileVault is On." && $loggedInUsername != "root" ]]; then
+		message 0 "Loading com.apple.install.osinstallersetupd.plist with launchctl into ${loggedInUsername}'s gui context."
+		/bin/launchctl bootstrap gui/"$loggedInUsername" /Library/LaunchAgents/com.apple.install.osinstallersetupd.plist
+	fi
+
+	message 0 "Launching jamfHelper to begin the macOS install process."
+	windowType="fs"
+	heading="Please wait as you computer is prepared for $macOSname."
+	description="Preparation for $macOSname will take approximately 5-10 minutes.  Once completed, your computer will reboot and continue the installation."
+	alignDescription="left"
+	alignHeading="center"
+	button1Label="OK"
+	icon="$installerPath/Contents/Resources/InstallAssistant.icns"
+	iconSize=100
+
+	/Library/Application\ Support/JAMF/bin/jamfHelper.app/Contents/MacOS/jamfHelper -windowType "$windowType" -heading "$heading" -description "$description" -icon "$icon" -iconSize "$iconSize" &
+
+	jamfHelperPID=$!
+
+	case "$installerVersionMajor" in
+		14)
+			if ((eraseInstall == 1)); then
+				"$installerPath"/Contents/Resources/startosinstall --agreetolicense --nointeraction --eraseinstall --pidtosignal "$jamfHelperPID" >> "$log" &
+			else
+				"$installerPath"/Contents/Resources/startosinstall --agreetolicense --nointeraction --pidtosignal "$jamfHelperPID" >> "$log" &
+			fi
+			;;
+		13)
+			if ((eraseInstall == 1 && osVersionMajor == 13 && installerVersionMinor >= 4)); then
+				"$installerPath"/Contents/Resources/startosinstall --applicationpath "$installerPath" --agreetolicense --nointeraction --eraseinstall --pidtosignal "$jamfHelperPID" >> "$log" &
+			else # No erase install or not the right installer/client version
+				"$installerPath"/Contents/Resources/startosinstall --applicationpath "$installerPath" --agreetolicense --nointeraction --pidtosignal "$jamfHelperPID" >> "$log" &
+			fi
+			;;
+		*)
+			message 90 "Unknown/Unsupported macOS installer version."
+			;;
+	esac
+	/bin/sleep 3
 }
 
 [[ ! -d "$logDir" ]] && mkdir -p "$logDir"
@@ -364,349 +698,3 @@ ln -s "$logDate" "$log"
 message 0 "BEGIN: $log $date"
 main "$@"
 finish
-
-
-
-:<<COMMENT
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-# USER VARIABLES
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-
-##Specify path to OS installer. Use Parameter 4 in the JSS, or specify here
-##Example: /Applications/Install macOS High Sierra.app
-OSInstaller="$4"
-
-##Version of Installer OS. Use Parameter 5 in the JSS, or specify here.
-##Example Command: /usr/libexec/PlistBuddy -c 'Print :"System Image Info":version' "/Applications/Install\ macOS\ High\ Sierra.app/Contents/SharedSupport/InstallInfo.plistr"
-##Example: 10.12.5
-version="$5"
-versionMajor=$( /bin/echo "$version" | /usr/bin/awk -F. '{print $2}' )
-versionMinor=$( /bin/echo "$version" | /usr/bin/awk -F. '{print $3}' )
-
-##Custom Trigger used for download. Use Parameter 6 in the JSS, or specify here.
-##This should match a custom trigger for a policy that contains just the 
-##MacOS installer. Make sure that the policy is scoped properly
-##to relevant computers and/or users, or else the custom trigger will
-##not be picked up. Use a separate policy for the script itself.
-##Example trigger name: download-sierra-install
-download_trigger="$6"
-
-##MD5 Checksum of InstallESD.dmg
-##This variable is OPTIONAL
-##Leave the variable BLANK if you do NOT want to verify the checksum (DEFAULT)
-##Example Command: /sbin/md5 /Applications/Install\ macOS\ High\ Sierra.app/Contents/SharedSupport/InstallESD.dmg
-##Example MD5 Checksum: b15b9db3a90f9ae8a9df0f81741efa2b
-installESDChecksum="$7"
-
-##Valid Checksum?  O (Default) for false, 1 for true.
-validChecksum=0
-
-##Unsuccessful Download?  0 (Default) for false, 1 for true.
-unsuccessfulDownload=0
-
-##Erase & Install macOS (Factory Defaults)
-##Requires macOS Installer 10.13.4 or later
-##Disabled by default
-##Options: 0 = Disabled / 1 = Enabled
-##Use Parameter 8 in the JSS.
-eraseInstall="$8"
-if [[ "${eraseInstall:=0}" != 1 ]]; then eraseInstall=0 ; fi
-#macOS Installer 10.13.3 or ealier set 0 to it.
-if [ "$versionMajor${versionMinor:=0}" -lt 134 ]; then
-    eraseInstall=0
-fi
-
-##Enter 0 for Full Screen, 1 for Utility window (screenshots available on GitHub)
-##Full Screen by default
-##Use Parameter 9 in the JSS.
-userDialog="$9"
-if [[ ${userDialog:=0} != 1 ]]; then userDialog=0 ; fi
-
-##Title of OS
-##Example: macOS High Sierra
-macOSname=$(/bin/echo "$OSInstaller" | /usr/bin/sed 's/^\/Applications\/Install \(.*\)\.app$/\1/')
-
-##Title to be used for userDialog (only applies to Utility Window)
-title="$macOSname Upgrade"
-
-##Heading to be used for userDialog
-heading="Please wait as we prepare your computer for $macOSname..."
-
-##Title to be used for userDialog
-description="This process will take approximately 5-10 minutes.
-Once completed your computer will reboot and begin the upgrade."
-
-##Description to be used prior to downloading the OS installer
-dldescription="We need to download $macOSname to your computer, this will \
-take several minutes."
-
-##Jamf Helper HUD Position if macOS Installer needs to be downloaded
-##Options: ul (Upper Left); ll (Lower Left); ur (Upper Right); lr (Lower Right)
-##Leave this variable empty for HUD to be centered on main screen
-dlPosition="ul"
-
-##Icon to be used for userDialog
-##Default is macOS Installer logo which is included in the staged installer package
-icon="$OSInstaller/Contents/Resources/InstallAssistant.icns"
-
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-# FUNCTIONS
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-
-downloadInstaller() {
-    /bin/echo "Downloading macOS Installer..."
-    /Library/Application\ Support/JAMF/bin/jamfHelper.app/Contents/MacOS/jamfHelper \
-        -windowType hud -windowPosition $dlPosition -title "$title" -alignHeading center -alignDescription left -description "$dldescription" \
-        -lockHUD -icon "/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/SidebarDownloadsFolder.icns" -iconSize 100 &
-    ##Capture PID for Jamf Helper HUD
-    jamfHUDPID=$!
-    ##Run policy to cache installer
-    /usr/local/jamf/bin/jamf policy -event "$download_trigger"
-    ##Kill Jamf Helper HUD post download
-    /bin/kill "${jamfHUDPID}"
-}
-
-verifyChecksum() {
-    if [[ "$installESDChecksum" != "" ]]; then
-        osChecksum=$( /sbin/md5 -q "$OSInstaller/Contents/SharedSupport/InstallESD.dmg" )
-        if [[ "$osChecksum" == "$installESDChecksum" ]]; then
-            /bin/echo "Checksum: Valid"
-            validChecksum=1
-            return
-        else
-            /bin/echo "Checksum: Not Valid"
-            /bin/echo "Beginning new dowload of installer"
-            /bin/rm -rf "$OSInstaller"
-            /bin/sleep 2
-            downloadInstaller
-        fi
-    else
-        ##Checksum not specified as script argument, assume true
-        validChecksum=1
-        return
-    fi
-}
-
-cleanExit() {
-    /bin/kill "${caffeinatePID}"
-    exit "$1"
-}
-
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-# SYSTEM CHECKS
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-
-##Caffeinate
-/usr/bin/caffeinate -dis &
-caffeinatePID=$!
-
-##Get Current User
-currentUser=$( /usr/bin/stat -f %Su /dev/console )
-
-##Check if FileVault Enabled
-fvStatus=$( /usr/bin/fdesetup status | head -1 )
-
-##Check if device is on battery or ac power
-pwrAdapter=$( /usr/bin/pmset -g ps )
-if [[ ${pwrAdapter} == *"AC Power"* ]]; then
-    pwrStatus="OK"
-    /bin/echo "Power Check: OK - AC Power Detected"
-else
-    pwrStatus="ERROR"
-    /bin/echo "Power Check: ERROR - No AC Power Detected"
-fi
-
-##Check if free space > 15GB
-osMajor=$( /usr/bin/sw_vers -productVersion | /usr/bin/awk -F. '{print $2}' )
-osMinor=$( /usr/bin/sw_vers -productVersion | /usr/bin/awk -F. '{print $3}' )
-if [[ $osMajor -eq 12 ]] || [[ $osMajor -eq 13 && $osMinor -lt 4 ]]; then
-    freeSpace=$( /usr/sbin/diskutil info / | /usr/bin/grep "Available Space" | /usr/bin/awk '{print $6}' | /usr/bin/cut -c 2- )
-else
-    freeSpace=$( /usr/sbin/diskutil info / | /usr/bin/grep "Free Space" | /usr/bin/awk '{print $6}' | /usr/bin/cut -c 2- )
-fi
-
-if [[ ${freeSpace%.*} -ge 15000000000 ]]; then
-    spaceStatus="OK"
-    /bin/echo "Disk Check: OK - ${freeSpace%.*} Bytes Free Space Detected"
-else
-    spaceStatus="ERROR"
-    /bin/echo "Disk Check: ERROR - ${freeSpace%.*} Bytes Free Space Detected"
-fi
-
-##Check for existing OS installer
-loopCount=0
-while [[ $loopCount -lt 3 ]]; do
-    if [ -e "$OSInstaller" ]; then
-        /bin/echo "$OSInstaller found, checking version."
-        OSVersion=$(/usr/libexec/PlistBuddy -c 'Print :"System Image Info":version' "$OSInstaller/Contents/SharedSupport/InstallInfo.plist")
-        /bin/echo "OSVersion is $OSVersion"
-        if [ "$OSVersion" = "$version" ]; then
-          /bin/echo "Installer found, version matches. Verifying checksum..."
-          verifyChecksum
-        else
-          ##Delete old version.
-          /bin/echo "Installer found, but old. Deleting..."
-          /bin/rm -rf "$OSInstaller"
-          /bin/sleep 2
-          downloadInstaller
-        fi
-        if [ "$validChecksum" == 1 ]; then
-            unsuccessfulDownload=0
-            break
-        fi
-    else
-        downloadInstaller
-    fi
-
-    unsuccessfulDownload=1
-    ((loopCount++))
-done
-
-if (( unsuccessfulDownload == 1 )); then
-    /bin/echo "macOS Installer Downloaded 3 Times - Checksum is Not Valid"
-    /bin/echo "Prompting user for error and exiting..."
-    /Library/Application\ Support/JAMF/bin/jamfHelper.app/Contents/MacOS/jamfHelper -windowType utility -title "$title" -icon "$icon" -heading "Error Downloading $macOSname" -description "We were unable to prepare your computer for $macOSname. Please contact the IT Support Center." -iconSize 100 -button1 "OK" -defaultButton 1
-    cleanExit 0
-fi
-
-
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-# CREATE FIRST BOOT SCRIPT
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-
-/bin/mkdir -p /usr/local/jamfps
-
-/bin/echo "#!/bin/bash
-## First Run Script to remove the installer.
-## Clean up files
-/bin/rm -fr \"$OSInstaller\"
-/bin/sleep 2
-## Update Device Inventory
-/usr/local/jamf/bin/jamf recon
-## Remove LaunchDaemon
-/bin/rm -f /Library/LaunchDaemons/com.jamfps.cleanupOSInstall.plist
-## Remove Script
-/bin/rm -fr /usr/local/jamfps
-exit 0" > /usr/local/jamfps/finishOSInstall.sh
-
-/usr/sbin/chown root:admin /usr/local/jamfps/finishOSInstall.sh
-/bin/chmod 755 /usr/local/jamfps/finishOSInstall.sh
-
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-# LAUNCH DAEMON
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-
-/bin/cat << EOF > /Library/LaunchDaemons/com.jamfps.cleanupOSInstall.plist
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.jamfps.cleanupOSInstall</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/bin/bash</string>
-        <string>-c</string>
-        <string>/usr/local/jamfps/finishOSInstall.sh</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-</dict>
-</plist>
-EOF
-
-##Set the permission on the file just made.
-/usr/sbin/chown root:wheel /Library/LaunchDaemons/com.jamfps.cleanupOSInstall.plist
-/bin/chmod 644 /Library/LaunchDaemons/com.jamfps.cleanupOSInstall.plist
-
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-# LAUNCH AGENT FOR FILEVAULT AUTHENTICATED REBOOTS
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-
-##Determine Program Argument
-if [[ $osMajor -ge 11 ]]; then
-    progArgument="osinstallersetupd"
-elif [[ $osMajor -eq 10 ]]; then
-    progArgument="osinstallersetupplaind"
-fi
-
-/bin/cat << EOP > /Library/LaunchAgents/com.apple.install.osinstallersetupd.plist
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.apple.install.osinstallersetupd</string>
-    <key>LimitLoadToSessionType</key>
-    <string>Aqua</string>
-    <key>MachServices</key>
-    <dict>
-        <key>com.apple.install.osinstallersetupd</key>
-        <true/>
-    </dict>
-    <key>TimeOut</key>
-    <integer>300</integer>
-    <key>OnDemand</key>
-    <true/>
-    <key>ProgramArguments</key>
-    <array>
-        <string>$OSInstaller/Contents/Frameworks/OSInstallerSetup.framework/Resources/$progArgument</string>
-    </array>
-</dict>
-</plist>
-EOP
-
-##Set the permission on the file just made.
-/usr/sbin/chown root:wheel /Library/LaunchAgents/com.apple.install.osinstallersetupd.plist
-/bin/chmod 644 /Library/LaunchAgents/com.apple.install.osinstallersetupd.plist
-
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-# APPLICATION
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-
-if [[ ${pwrStatus} == "OK" ]] && [[ ${spaceStatus} == "OK" ]]; then
-    ##Launch jamfHelper
-    if [ ${userDialog} -eq 0 ]; then
-        /bin/echo "Launching jamfHelper as FullScreen..."
-        /Library/Application\ Support/JAMF/bin/jamfHelper.app/Contents/MacOS/jamfHelper -windowType fs -title "" -icon "$icon" -heading "$heading" -description "$description" &
-        jamfHelperPID=$!
-    else
-        /bin/echo "Launching jamfHelper as Utility Window..."
-        /Library/Application\ Support/JAMF/bin/jamfHelper.app/Contents/MacOS/jamfHelper -windowType utility -title "$title" -icon "$icon" -heading "$heading" -description "$description" -iconSize 100 &
-        jamfHelperPID=$!
-    fi
-    ##Load LaunchAgent
-    if [[ ${fvStatus} == "FileVault is On." ]] && [[ ${currentUser} != "root" ]]; then
-        userID=$( /usr/bin/id -u "${currentUser}" )
-        /bin/launchctl bootstrap gui/"${userID}" /Library/LaunchAgents/com.apple.install.osinstallersetupd.plist
-    fi
-    ##Begin Upgrade
-    /bin/echo "Launching startosinstall..."
-    ##Check if eraseInstall is Enabled
-    if [[ $eraseInstall == 1 ]]; then
-        eraseopt='--eraseinstall'
-        /bin/echo "   Script is configured for Erase and Install of macOS."
-    fi
-
-    osinstallLogfile="/var/log/startosinstall.log"
-    if [ "$versionMajor" -ge 14 ]; then
-        eval /usr/bin/nohup "\"$OSInstaller/Contents/Resources/startosinstall\"" "$eraseopt" --agreetolicense --nointeraction --pidtosignal "$jamfHelperPID" >> "$osinstallLogfile" &
-    else
-        eval /usr/bin/nohup "\"$OSInstaller/Contents/Resources/startosinstall\"" "$eraseopt" --applicationpath "\"$OSInstaller\"" --agreetolicense --nointeraction --pidtosignal "$jamfHelperPID" >> "$osinstallLogfile" &
-    fi
-    /bin/sleep 3
-else
-    ## Remove Script
-    /bin/rm -f /usr/local/jamfps/finishOSInstall.sh
-    /bin/rm -f /Library/LaunchDaemons/com.jamfps.cleanupOSInstall.plist
-    /bin/rm -f /Library/LaunchAgents/com.apple.install.osinstallersetupd.plist
-
-    /bin/echo "Launching jamfHelper Dialog (Requirements Not Met)..."
-    /Library/Application\ Support/JAMF/bin/jamfHelper.app/Contents/MacOS/jamfHelper -windowType utility -title "$title" -icon "$icon" -heading "Requirements Not Met" -description "We were unable to prepare your computer for $macOSname. Please ensure you are connected to power and that you have at least 15GB of Free Space.
-
-    If you continue to experience this issue, please contact the IT Support Center." -iconSize 100 -button1 "OK" -defaultButton 1
-
-fi
-
-cleanExit 0
-COMMENT
