@@ -59,9 +59,9 @@
 #	HISTORY
 #
 #	Version is: YYYY/MM/DD @ HH:MMam/pm
-#	Version is: 2018/10/19 @ 9:00am
+#	Version is: 2018/10/19 @ 2:00pm
 #
-#	- 2018/10/19 @ 9:00am by Jeff Rippy | Tennessee Tech University
+#	- 2018/10/19 @ 2:00pm by Jeff Rippy | Tennessee Tech University
 #		- Updated to reflect some changes from Joshua's Master Branch.
 #			v. 2.7.2.1
 #	- 2018/09/28 by Joshua Roskos | Jamf
@@ -444,11 +444,6 @@ function main()
 	local downloadVersion=""
 	local jamfHelperPID=""
 
-	# Caffeinate
-	/usr/bin/caffeinate -dis &
-	caffeinatePID=$!
-	[[ $debug == TRUE ]] && message 0 "Disabling sleep during script.  Caffeinate PID is $caffeinatePID."
-
 	if ((osVersionMajor == 10 && osVersionMinor < 5)) || ((osVersionMajor < 10)); then
 		windowType="utility"
 		windowPosition="center"
@@ -696,5 +691,9 @@ email: helpdesk@tntech.edu, phone: (931) 372-3975"
 ln -s "$logDate" "$log"
 [[ $debug == TRUE ]] && message 0 "Mode: DEBUG"
 message 0 "BEGIN: $log $date"
+# Caffeinate
+/usr/bin/caffeinate -dis &
+caffeinatePID=$!
+[[ $debug == TRUE ]] && message 0 "Disabling sleep during script.  Caffeinate PID is $caffeinatePID."
 main "$@"
 finish
