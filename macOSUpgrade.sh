@@ -1,7 +1,7 @@
 #!/bin/bash
 ################################################################################
 #
-#	Copyright (c) 2018, Jamf.  All rights reserved.
+#	Copyright (c) 2019, Jamf.  All rights reserved.
 #
 #		Redistribution and use in source and binary forms, with or without
 #		modification, are permitted provided that the following conditions
@@ -59,11 +59,14 @@
 #	HISTORY
 #
 #	Version is: YYYY/MM/DD @ HH:MMam/pm
-#	Version is: 2018/10/19 @ 2:00pm
+#	Version is: 2019/10/31 @ 12:00pm
 #
+#	- 2019/10/31 @ 12:00pm by Jeff Rippy | Tennessee Tech University
+#		- Updated to reflect some changes from Joshua's Master Branch.
+#		- Last commit at this time is 5790877 on 2019/07/15
 #	- 2018/10/19 @ 2:00pm by Jeff Rippy | Tennessee Tech University
 #		- Updated to reflect some changes from Joshua's Master Branch.
-#			v. 2.7.2.1
+#		- v. 2.7.2.1
 #	- 2018/09/28 by Joshua Roskos | Jamf
 #		- Incorporated several commits on Github.
 #		- Version incremented to 2.7.2.1
@@ -103,17 +106,22 @@ macOSname=""
 
 # Minimum requirements for install.  These are my required minimums for Tennessee Tech.
 # Actual system requirements Mojave: https://support.apple.com/en-us/HT201475
+# Actual system requirements Catalina: https://support.apple.com/en-us/HT210222
 requiredMinimumRAM1013=4
 requiredMinimumRAM1014=4
+requiredMinimumRAM1015=4
 requiredMinimumSpace1013=15
 requiredMinimumSpace1014=20
+requiredMinimumSpace1015=20
 
 # Don't change these values.
 # Calculated requirements for install.
 minimumRAM1013=$((requiredMinimumRAM1013 * gigabytes))
 minimumRAM1014=$((requiredMinimumRAM1014 * gigabytes))
+minimumRAM1015=$((requiredMinimumRAM1015 * gigabytes))
 minimumSpace1013=$((requiredMinimumSpace1013 * gigabytes))
 minimumSpace1014=$((requiredMinimumSpace1014 * gigabytes))
+minimumSpace1015=$((requiredMinimumSpace1015 * gigabytes))
 
 ################################################################################
 #
@@ -125,10 +133,20 @@ function finish()
 {
 	local exitStatus=$1
 	[[ $exitStatus ]] || exitStatus=0
+
 	if [[ -n $caffeinatePID ]]; then
 		[[ $debug == TRUE ]] && message 0 "Stopping caffeinate PID: $caffeinatePID."
-		/bin/kill "$caffeinatePID"
+		if /bin/ps -p "$caffeinatePID" > /dev/null; then
+			/bin/kill "${caffeinatePID}"
+			wait "$caffeinatePID" 2>/dev/null
+		fi
 	fi
+
+	message 0 "Cleaning up install scripts."
+	/bin/rm -f /usr/local/tntech/finishOSInstall/finishOSInstall.sh
+	/bin/rm -f /Library/LaunchDaemons/edu.tntech.cleanupOSInstall.plist
+	/bin/rm -f /Library/LaunchAgents/com.apple.install.osinstallersetupd.plist
+
 	/bin/echo "FINISH: $log" | /usr/bin/tee -a "$log"
 	/usr/bin/logger -f "$log"
 	exit $exitStatus
@@ -326,7 +344,9 @@ function createFirstBootScript()
 # Remove LaunchDaemon
 /bin/rm -f /Library/LaunchDaemons/edu.tntech.cleanupOSInstall.plist
 # Remove this script
-/bin/rm -fr /usr/local/tntech/finishOSInstall
+/bin/rm -rf /usr/local/tntech/finishOSInstall
+# Remove FileVault Reboot plist
+/bin/rm -rf /Library/LaunchAgents/com.apple.install.osinstallersetupd.plist
 EOF
 
 	/usr/sbin/chown -R root:admin /usr/local/tntech/finishOSInstall
@@ -488,9 +508,10 @@ email: helpdesk@tntech.edu, phone: (931) 372-3975"
 	# Specify full path to installer.  Use parameter 4 in the Jamf Pro Server
 	# Ex: "/Applications/Install macOS High Sierra.app"
 	# Ex: "/Applications/Install macOS Mojave.app"
+	# Ex: "/Applications/Install macOS Catalina.app"
 	installerPath="$4"
 	if [[ -z $installerPath ]]; then
-		message 20 "The macOS installer path was not specified.  Example: \"/Applications/Install macOS High Sierra.app\""
+		message 20 "The macOS installer path was not specified.  Example: \"/Applications/Install macOS Catalina.app\""
 	fi
 	[[ $debug == TRUE ]] && message 0 "The macOS installer path has been set to \"$installerPath\"."
 
@@ -498,11 +519,11 @@ email: helpdesk@tntech.edu, phone: (931) 372-3975"
 	macOSname="$(/bin/echo "$installerPath" | /usr/bin/sed 's/^\/Applications\/Install \(.*\)\.app$/\1/')"
 
 	# Installer version.  Use parameter 5 in the Jamf Pro Server.
-	# Command to get the installer version: `/usr/libexec/PlistBuddy -c 'Print :"System Image Info":version' "/Applications/Install macOS High Sierra.app/Contents/SharedSupport/InstallInfo.plist"
+	# Command to get the installer version: `/usr/libexec/PlistBuddy -c 'Print :"System Image Info":version' "/Applications/Install macOS Catalina.app/Contents/SharedSupport/InstallInfo.plist"
 	# Ex: 10.13.6
 	installerVersion="$5"
 	if [[ -z $installerVersion ]]; then
-		message 30 "The macOS installer version was not specified.  Please run \`/usr/libexec/PlistBuddy -c \'Print :\"System Image Info\":version\' \"/Applications/Install macOS High Sierra.app/Contents/SharedSupport/InstallerInfo.plist\"\` to get the installer version."
+		message 30 "The macOS installer version was not specified.  Please run \`/usr/libexec/PlistBuddy -c \'Print :\"System Image Info\":version\' \"/Applications/Install macOS Catalina.app/Contents/SharedSupport/InstallerInfo.plist\"\` to get the installer version."
 	elif [[ ! $installerVersion =~ ^[0-9]{2}\.?[0-9]{2}\.?[0-9]?$ ]]; then
 		message 40 "The macOS installer version contained unknown an unknown value.  Exiting."
 	fi
@@ -525,7 +546,7 @@ email: helpdesk@tntech.edu, phone: (931) 372-3975"
 
 	# (OPTIONAL) md5 checksum of InstallESD.dmg
 	# This optional value serves to validate the macOS installer.
-	# Command to get the md5 checksum: `/sbin/md5 "/Applications/Install macOS High Sierra.app/Contents/SharedSupport/InstallESD.dmg"
+	# Command to get the md5 checksum: `/sbin/md5 "/Applications/Install macOS Catalina.app/Contents/SharedSupport/InstallESD.dmg"
 	# Ex: b15b9db3a90f9ae8a9df0f812741e52ad
 	installESDChecksum="$7"
 	if [[ -z $installESDChecksum ]]; then
@@ -552,13 +573,17 @@ email: helpdesk@tntech.edu, phone: (931) 372-3975"
 	fi
 
 	case $installerVersionMajor in
-		13)
-			minimumRAM="$minimumRAM1013"
-			minimumSpace="$minimumSpace1013"
+		15)
+			minimumRAM="$minimumRAM1015"
+			minimumSpace="$minimumSpace1015"
 			;;
 		14)
 			minimumRAM="$minimumRAM1014"
 			minimumSpace="$minimumSpace1014"
+			;;
+		13)
+			minimumRAM="$minimumRAM1013"
+			minimumSpace="$minimumSpace1013"
 			;;
 		*)
 			message 90 "Unknown/Unsupported macOS installer version."
@@ -618,12 +643,14 @@ email: helpdesk@tntech.edu, phone: (931) 372-3975"
 
 	createFirstBootScript "$installerPath"
 	createLaunchDaemonPlist
-	createLaunchAgentFileVaultRebootPlist "$installerPath"
+	if (( installerVersionMajor < 14 )); then
+		createLaunchAgentFileVaultRebootPlist "$installerPath"
+	fi
 
 	checkPower powerStatus
 	if [[ ! $powerStatus == "OK" || ! $spaceStatus == "OK" || ! $ramStatus == "OK" ]]; then
 		/bin/rm -f /Library/LaunchAgents/com.apple.install.osinstallersetupd.plist
-		/bin/rm -f /Library/LaunchDaemons/edu.tntech.finishOSInstall.plist
+		/bin/rm -f /Library/LaunchDaemons/edu.tntech.cleanupOSInstall.plist
 		/bin/rm -f /usr/local/tntech/finishOSInstall/finishOSInstall.sh
 
 		windowType="utility"
@@ -646,8 +673,10 @@ email: helpdesk@tntech.edu, phone: (931) 372-3975"
 
 	message 0 "Launching startosinstall."
 	if [[ $fvStatus == "FileVault is On." && $loggedInUsername != "root" ]]; then
-		message 0 "Loading com.apple.install.osinstallersetupd.plist with launchctl into ${loggedInUsername}'s gui context."
-		/bin/launchctl bootstrap gui/"$loggedInUsername" /Library/LaunchAgents/com.apple.install.osinstallersetupd.plist
+		if (( installerVersionMajor < 14 )); then
+			message 0 "Loading com.apple.install.osinstallersetupd.plist with launchctl into ${loggedInUsername}'s gui context."
+			/bin/launchctl bootstrap gui/"$loggedInUsername" /Library/LaunchAgents/com.apple.install.osinstallersetupd.plist
+		fi
 	fi
 
 	message 0 "Launching jamfHelper to begin the macOS install process."
@@ -665,6 +694,13 @@ email: helpdesk@tntech.edu, phone: (931) 372-3975"
 	jamfHelperPID=$!
 
 	case "$installerVersionMajor" in
+		15)
+			if ((eraseInstall == 1)); then
+				"$installerPath"/Contents/Resources/startosinstall --agreetolicense --nointeraction --eraseinstall --pidtosignal "$jamfHelperPID" >> "$log" &
+			else
+				"$installerPath"/Contents/Resources/startosinstall --agreetolicense --nointeraction --pidtosignal "$jamfHelperPID" >> "$log" &
+			fi
+			;;
 		14)
 			if ((eraseInstall == 1)); then
 				"$installerPath"/Contents/Resources/startosinstall --agreetolicense --nointeraction --eraseinstall --pidtosignal "$jamfHelperPID" >> "$log" &
