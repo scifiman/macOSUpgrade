@@ -48,23 +48,39 @@
 # Written by: Joshua Roskos | Jamf
 #
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+# APS Updates added 11/28/2019
+#
+# Updated "validate_free_space" to work with Catalina – freeSpace
+# Added "Print :APFSContainerFree"
+# /usr/libexec/PlistBuddy -c "Print :APFSContainerFree" /dev/stdin <<< "$diskInfoPlist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Print :FreeSpace" /dev/stdin <<< "$diskInfoPlist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Print :AvailableSpace" /dev/stdin <<< "$diskInfoPlist" 2>/dev/null
+# 
+# Updated loopCout to work with Stub/Lite installer – Stub/Lite installer does not specify a macOS version.
+# Check to see if the installer version matches, or if the installer does not have InstallInfo.plist.
+# if [ "$currentInstallerVersion" = "$installerVersion" ] || [[ ! -e "$OSInstaller/Contents/SharedSupport/InstallInfo.plist" ]]; then
+#
+# Updated variable "currentUser"
+#
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 # USER VARIABLES
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
-## Specify path to OS installer. Use Parameter 4 in the JSS, or specify here
+## Specify path to OS installer – Use Parameter 4 in the JSS, or specify here.
+## Parameter Label: Path to the macOS installer
 ## Example: /Applications/Install macOS High Sierra.app
 OSInstaller="$4"
 
 ## Version of Installer OS. Use Parameter 5 in the JSS, or specify here.
+## Parameter Label: Version of macOS
 ## Example Command: /usr/libexec/PlistBuddy -c 'Print :"System Image Info":version' "/Applications/Install macOS High Sierra.app/Contents/SharedSupport/InstallInfo.plist"
 ## Example: 10.12.5
 installerVersion="$5"
 installerVersionMajor=$( /bin/echo "$installerVersion" | /usr/bin/awk -F. '{print $2}' )
 installerVersionMinor=$( /bin/echo "$installerVersion" | /usr/bin/awk -F. '{print $3}' )
 
-## Custom Trigger used for download. Use Parameter 6 in the JSS, or specify here.
+## Custom Trigger used for download – Use Parameter 6 in the JSS, or specify here.
+## Parameter Label: Download Policy Trigger
 ## This should match a custom trigger for a policy that contains just the
 ## MacOS installer. Make sure that the policy is scoped properly
 ## to relevant computers and/or users, or else the custom trigger will
@@ -72,7 +88,8 @@ installerVersionMinor=$( /bin/echo "$installerVersion" | /usr/bin/awk -F. '{prin
 ## Example trigger name: download-sierra-install
 download_trigger="$6"
 
-## MD5 Checksum of InstallESD.dmg
+## MD5 Checksum of InstallESD.dmg – Use Parameter 7 in the JSS.
+## Parameter Label: installESD Checksum (optional)
 ## This variable is OPTIONAL
 ## Leave the variable BLANK if you do NOT want to verify the checksum (DEFAULT)
 ## Example Command: /sbin/md5 /Applications/Install\ macOS\ High\ Sierra.app/Contents/SharedSupport/InstallESD.dmg
@@ -90,6 +107,7 @@ unsuccessfulDownload=0
 ## Disabled by default
 ## Options: 0 = Disabled / 1 = Enabled
 ## Use Parameter 8 in the JSS.
+## Parameter Label: Upgrade or Erase (0 or 1)
 eraseInstall="$8"
 if [ "$eraseInstall" != "1" ]; then eraseInstall=0 ; fi
 # macOS Installer 10.13.3 or ealier set 0 to it.
@@ -100,6 +118,7 @@ fi
 ## Enter 0 for Full Screen, 1 for Utility window (screenshots available on GitHub)
 ## Full Screen by default
 ## Use Parameter 9 in the JSS.
+## Parameter Label: Full Screen or Dialog Box (0 or 1)
 userDialog="$9"
 if [ "$userDialog" != "1" ]; then userDialog=0 ; fi
 
@@ -169,6 +188,9 @@ caffeinatePID=""
 ## The startossinstall command option array
 declare -a startosinstallOptions=()
 
+## Determine binary name
+binaryNameForOSInstallerSetup=$([ "$installerVersionMajor" -ge 11 ] && /bin/echo "osinstallersetupd" || /bin/echo "osinstallersetupplaind")
+
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 # FUNCTIONS
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
@@ -237,8 +259,9 @@ validate_free_space() {
 
     diskInfoPlist=$(/usr/sbin/diskutil info -plist /)
     ## 10.13.4 or later, diskutil info command output changes key from 'AvailableSpace' to 'Free Space' about disk space.
+    ## 10.15.0 or later, diskutil info command output changes key from 'APFSContainerFree' to 'Free Space' about disk space.
     freeSpace=$(
-    /usr/libexec/PlistBuddy -c "Print :FreeSpace" /dev/stdin <<< "$diskInfoPlist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Print :AvailableSpace" /dev/stdin <<< "$diskInfoPlist" 2>/dev/null
+    /usr/libexec/PlistBuddy -c "Print :APFSContainerFree" /dev/stdin <<< "$diskInfoPlist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Print :FreeSpace" /dev/stdin <<< "$diskInfoPlist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Print :AvailableSpace" /dev/stdin <<< "$diskInfoPlist" 2>/dev/null
     )
 
     ## The free space calculation also includes the installer, so it is excluded.
@@ -266,7 +289,7 @@ verifyChecksum() {
             return
         else
             /bin/echo "Checksum: Not Valid"
-            /bin/echo "Beginning new dowload of installer"
+            /bin/echo "Beginning new download of installer"
             /bin/rm -rf "$OSInstaller"
             /bin/sleep 2
             downloadInstaller
@@ -293,12 +316,20 @@ cleanExit() {
 # SYSTEM CHECKS
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
+## If previous processes remain for some reason, the installation will freeze, so kill it.
+killingProcesses=("caffeinate" "startosinstall" "$binaryNameForOSInstallerSetup")
+for processName in "${killingProcesses[@]}"; do
+    [ -z "$processName" ] && continue
+    /bin/echo "Killing $processName processes."
+    /usr/bin/killall "$processName" 2>&1 || true
+done
+
 ## Caffeinate
 /usr/bin/caffeinate -dis &
 caffeinatePID=$!
 
-## Get Current User
-currentUser=$( /usr/bin/stat -f %Su /dev/console )
+##Get Current User
+currentUser=$(/bin/echo 'show State:/Users/ConsoleUser' | /usr/sbin/scutil | /usr/bin/awk '/Name / { print $3 }')
 
 ## Check if FileVault Enabled
 fvStatus=$( /usr/bin/fdesetup status | /usr/bin/head -1 )
@@ -326,7 +357,8 @@ while [ "$loopCount" -lt 3 ]; do
         /bin/echo "$OSInstaller found, checking version."
         currentInstallerVersion=$(/usr/libexec/PlistBuddy -c 'Print :"System Image Info":version' "$OSInstaller/Contents/SharedSupport/InstallInfo.plist")
         /bin/echo "Found macOS installer for version $currentInstallerVersion."
-        if [ "$currentInstallerVersion" = "$installerVersion" ]; then
+        ## Check to see if the installer version matches, or if the installer does not have InstallInfo.plist.
+        if [ "$currentInstallerVersion" = "$installerVersion" ] || [[ ! -e "$OSInstaller/Contents/SharedSupport/InstallInfo.plist" ]]; then
             /bin/echo "Installer found, version matches. Verifying checksum..."
             verifyChecksum
         else
@@ -358,11 +390,31 @@ fi
 # CREATE FIRST BOOT SCRIPT
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
+## Because the parent bash script creates a new bash script using HEREDOC ( this <<EOF >that ),
+## use a backslash before the dollar sign to avoid evaluating the variable (or command) as part of creating the script.
+
 /bin/mkdir -p /usr/local/jamfps
 
 /bin/cat << EOF > "$finishOSInstallScriptFilePath"
 #!/bin/bash
 ## First Run Script to remove the installer.
+
+
+## Wait until /var/db/.AppleUpgrade disappears
+while [ -e /var/db/.AppleUpgrade ];
+do
+	echo "\$(date "+%a %h %d %H:%M:%S"): Waiting for /var/db/.AppleUpgrade to disappear." >> /usr/local/jamfps/firstbootupgrade.log
+    sleep 60
+done
+    
+## Wait until the upgrade process completes
+INSTALLER_PROGRESS_PROCESS=\$(pgrep -l "Installer Progress")
+until [ "\$INSTALLER_PROGRESS_PROCESS" = "" ];
+do
+	echo "\$(date "+%a %h %d %H:%M:%S"): Waiting for Installer Progress to complete." >> /usr/local/jamfps/firstbootupgrade.log
+    sleep 60
+    INSTALLER_PROGRESS_PROCESS=\$(pgrep -l "Installer Progress")
+done
 ## Clean up files
 /bin/rm -fr "$OSInstaller"
 ## Update Device Inventory
@@ -409,13 +461,6 @@ EOF
 # LAUNCH AGENT FOR FILEVAULT AUTHENTICATED REBOOTS
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 if [ "$cancelFVAuthReboot" -eq 0 ]; then
-    ## Determine Program Argument
-    if [ "$installerVersionMajor" -ge 11 ]; then
-        progArgument="osinstallersetupd"
-    elif [ "$installerVersionMajor" -eq 10 ]; then
-        progArgument="osinstallersetupplaind"
-    fi
-
     /bin/cat << EOP > "$osinstallersetupdAgentSettingsFilePath"
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -436,7 +481,7 @@ if [ "$cancelFVAuthReboot" -eq 0 ]; then
     <true/>
     <key>ProgramArguments</key>
     <array>
-        <string>$OSInstaller/Contents/Frameworks/OSInstallerSetup.framework/Resources/$progArgument</string>
+        <string>$OSInstaller/Contents/Frameworks/OSInstallerSetup.framework/Resources/$binaryNameForOSInstallerSetup</string>
     </array>
 </dict>
 </plist>
@@ -485,6 +530,11 @@ if [ "$installerVersionMajor" -lt 14 ]; then
     startosinstallOptions+=("--applicationpath \"$OSInstaller\"")
 fi
 
+if [ "$installerVersionMajor" -gt 14 ]; then
+    # The --forcequitapps option will force Self Service to quit, which prevents Self Service from cancelling a restart
+    startosinstallOptions+=("--forcequitapps")
+fi
+
 ## Check if eraseInstall is Enabled
 if [ "$eraseInstall" -eq 1 ]; then
     startosinstallOptions+=("--eraseinstall")
@@ -498,4 +548,4 @@ eval "$startosinstallCommand"
 
 /bin/sleep 3
 
-cleanExit 0
+exit 0
